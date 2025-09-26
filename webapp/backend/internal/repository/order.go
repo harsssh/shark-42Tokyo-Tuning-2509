@@ -32,6 +32,41 @@ func (r *OrderRepository) Create(ctx context.Context, order *model.Order) (strin
 	return fmt.Sprintf("%d", id), nil
 }
 
+func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order) ([]string, error) {
+	if len(orders) == 0 {
+		return []string{}, nil
+	}
+
+	// NOTE: 良くないキャスト
+	txx, ok := r.db.(*sqlx.Tx)
+	if !ok {
+		return nil, fmt.Errorf("BatchCreate must be called within a transaction")
+	}
+
+	// named exec で insert する
+	query := `INSERT INTO orders (user_id, product_id, shipped_status, created_at) VALUES (:user_id, :product_id, 'shipping', NOW())`
+	result, err := txx.NamedExecContext(ctx, query, orders)
+	if err != nil {
+		return nil, err
+	}
+
+	// NOTE: 結構怖い
+	var insertedIDs []string
+	lastID, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	for i := int64(0); i < rowsAffected; i++ {
+		insertedIDs = append(insertedIDs, fmt.Sprintf("%d", lastID+i))
+	}
+
+	return insertedIDs, nil
+}
+
 // 複数の注文IDのステータスを一括で更新
 // 主に配送ロボットが注文を引き受けた際に一括更新をするために使用
 func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, newStatus string) error {
