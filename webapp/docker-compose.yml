@@ -10,7 +10,7 @@ services:
       target: production
     environment:
       TZ: Asia/Tokyo
-      DATABASE_URL: user:password@tcp(db:3306)/42Tokyo2508-db
+      DATABASE_URL: user:password@tcp(db:3306)/42tokyo2508-db
       TRACE_ENABLED: "true" # いらない時はfalse
       JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
       TRACE_SAMPLE_RATIO: "0.5" # ちょっと下げた
@@ -76,7 +76,7 @@ services:
     environment:
       TZ: Asia/Tokyo
       MYSQL_ROOT_PASSWORD: mysql
-      MYSQL_DATABASE: 42Tokyo2508-db
+      MYSQL_DATABASE: 42tokyo2508-db
       MYSQL_USER: user
       MYSQL_PASSWORD: password
     ports:

@@ -58,7 +58,7 @@ do
     fi
 
     echo "${fileName}を適用します..."
-    docker exec tuning-mysql bash -c "mysql -u root -pmysql 42Tokyo2508-db < /etc/mysql/migration/${fileName}"
+    docker exec tuning-mysql bash -c "mysql -u root -pmysql 42tokyo2508-db < /etc/mysql/migration/${fileName}"
     next=$(($next + 1))
 done
 

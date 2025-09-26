@@ -11,7 +11,7 @@ services:
       TRACE_ENABLED: "true"
       JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
       TRACE_SAMPLE_RATIO: "1.0"
-      DATABASE_URL: user:password@tcp(db:3306)/42Tokyo2508-db
+      DATABASE_URL: user:password@tcp(db:3306)/42tokyo2508-db
       PORT: 8080
     working_dir: /usr/src/backend
     volumes:
@@ -69,7 +69,7 @@ services:
     image: 42tokyo2508.azurecr.io/mysql:base
     environment:
       MYSQL_ROOT_PASSWORD: mysql
-      MYSQL_DATABASE: 42Tokyo2508-db
+      MYSQL_DATABASE: 42tokyo2508-db
       MYSQL_USER: user
       MYSQL_PASSWORD: password
     ports:

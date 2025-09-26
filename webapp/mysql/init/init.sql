@@ -1,4 +1,4 @@
-USE `42Tokyo2508-db`;
+USE `42tokyo2508-db`;
 
 DROP TABLE IF EXISTS user_sessions;
 DROP TABLE IF EXISTS orders;
