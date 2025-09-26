@@ -13,7 +13,7 @@ services:
       DATABASE_URL: user:password@tcp(db:3306)/42Tokyo2508-db
       TRACE_ENABLED: "true" # いらない時はfalse
       JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
-      TRACE_SAMPLE_RATIO: "1.0"
+      TRACE_SAMPLE_RATIO: "0.5" # ちょっと下げた
       # OTEL_TRACES_SAMPLER: "always_off"
     ports:
       - "8080:8080"
