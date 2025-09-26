@@ -47,6 +47,7 @@ func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
 	if req.Type != "" && req.Type != "partial" && req.Type != "prefix" {
 		req.Type = "partial"
 	}
+	req.Offset = (req.Page - 1) * req.PageSize
 
 	orders, total, err := h.OrderSvc.FetchOrders(r.Context(), userID, req)
 	if err != nil {
