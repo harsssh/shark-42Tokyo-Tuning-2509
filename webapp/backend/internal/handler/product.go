@@ -13,6 +13,13 @@ import (
 	"strings"
 )
 
+const (
+	PRODUCT_PAGE_DEFAULT       = 1
+	PRODUCT_PAGE_SIZE_DEFAULT  = 20
+	PRODUCT_SORT_FIELD_DEFAULT = "product_id"
+	PRODUCT_SORT_ORDER_DEFAULT = "asc"
+)
+
 type ProductHandler struct {
 	ProductSvc *service.ProductService
 }
@@ -36,16 +43,16 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Page <= 0 {
-		req.Page = 1
+		req.Page = PRODUCT_PAGE_DEFAULT
 	}
 	if req.PageSize <= 0 {
-		req.PageSize = 20
+		req.PageSize = PRODUCT_PAGE_SIZE_DEFAULT
 	}
 	if req.SortField == "" {
-		req.SortField = "product_id"
+		req.SortField = PRODUCT_SORT_FIELD_DEFAULT
 	}
 	if req.SortOrder == "" {
-		req.SortOrder = "asc"
+		req.SortOrder = PRODUCT_SORT_ORDER_DEFAULT
 	}
 	req.Offset = (req.Page - 1) * req.PageSize
 

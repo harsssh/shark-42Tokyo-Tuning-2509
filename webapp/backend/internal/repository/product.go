@@ -3,6 +3,7 @@ package repository
 import (
 	"backend/internal/model"
 	"context"
+	"fmt"
 )
 
 type ProductRepository struct {
@@ -23,12 +24,13 @@ func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req mo
 	args := []interface{}{}
 
 	if req.Search != "" {
+		// あいまい検索
 		baseQuery += " WHERE (name LIKE ? OR description LIKE ?)"
 		searchPattern := "%" + req.Search + "%"
 		args = append(args, searchPattern, searchPattern)
 	}
 
-	baseQuery += " ORDER BY " + req.SortField + " " + req.SortOrder + " , product_id ASC"
+	baseQuery += fmt.Sprintf(" ORDER BY %s %s, product_id ASC LIMIT %d OFFSET %d", req.SortField, req.SortOrder, req.PageSize, req.Offset)
 
 	err := r.db.SelectContext(ctx, &products, baseQuery, args...)
 	if err != nil {
@@ -36,15 +38,5 @@ func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req mo
 	}
 
 	total := len(products)
-	start := req.Offset
-	end := req.Offset + req.PageSize
-	if start > total {
-		start = total
-	}
-	if end > total {
-		end = total
-	}
-	pagedProducts := products[start:end]
-
-	return pagedProducts, total, nil
+	return products, total, nil
 }
