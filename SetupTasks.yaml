@@ -4,7 +4,7 @@ version: "3"
 
 vars:
   CMD_INSTALL_DIR: /usr/local/bin
-  DOCKER_NETWORK: shared_network
+  DOCKER_NETWORK: webapp-network
   DOCKER_VOLUME: nginx_logs
 
 tasks:
