@@ -17,7 +17,7 @@ func InitDBConnection() (*sqlx.DB, error) {
 	if dbUrl == "" {
 		dbUrl = "user:password@tcp(db:4306)/42tokyo2508-db"
 	}
-	dsn := fmt.Sprintf("%s?charset=utf8mb4&parseTime=True&loc=Local", dbUrl)
+	dsn := fmt.Sprintf("%s?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true", dbUrl)
 	log.Printf(dsn)
 
 	driverName := telemetry.WrapSQLDriver("mysql")
