@@ -22,7 +22,7 @@ func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req mo
 	baseQuery := `
 		FROM products
 	`
-	args := []any{}
+	var args []any
 
 	// 検索条件
 	if req.Search != "" {
