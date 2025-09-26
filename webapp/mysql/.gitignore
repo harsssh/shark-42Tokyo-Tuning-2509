@@ -6,3 +6,4 @@ local_data
 local_csv
 data
 *.sql
+!migration/*.sql
