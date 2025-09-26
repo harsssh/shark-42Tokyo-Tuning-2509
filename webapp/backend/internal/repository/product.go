@@ -22,13 +22,13 @@ func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req mo
 	baseQuery := `
 		FROM products
 	`
-	args := []any{}
+	var args []any
 
 	// 検索条件
 	if req.Search != "" {
-		baseQuery += " WHERE (name LIKE ? OR description LIKE ?)"
-		searchPattern := "%" + req.Search + "%"
-		args = append(args, searchPattern, searchPattern)
+		baseQuery += " WHERE MATCH(name, description) AGAINST (? IN BOOLEAN MODE)"
+		searchPattern := "*" + req.Search + "*"
+		args = append(args, searchPattern)
 	}
 
 	// 件数をカウント
