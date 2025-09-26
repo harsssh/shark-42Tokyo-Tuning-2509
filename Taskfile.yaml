@@ -16,7 +16,7 @@ tasks:
     dir: webapp
     cmds:
       - task: checkout
-      - bash -e restart_container.sh
+      - bash -x restart_container.sh
 
   local:
     desc: ローカル環境のデプロイ
@@ -25,23 +25,23 @@ tasks:
         msg: "ローカル環境のみ有効です"
     dir: webapp
     cmds:
-      - bash -e restart_container.sh
+      - bash -x restart_container.sh
 
   test:
     desc: テストを実行
     dir: webapp/e2e
     cmds:
-      - bash -e run_e2e_test.sh
+      - bash -x run_e2e_test.sh
 
   bench:
     desc: ベンチマークを実行
     cmds:
-      - bash -e run.sh
+      - bash -x run.sh
 
   restore:
     desc: データベースのリストア & マイグレーション
     cmds:
-      - bash -e restore_and_migration.sh
+      - bash -x restore_and_migration.sh
 
   ####################
   #     Utility      #
