@@ -108,6 +108,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.local.conf:/etc/nginx/nginx.conf
+      - ./images:/app/images:ro
     networks:
       - webapp-network
     depends_on:

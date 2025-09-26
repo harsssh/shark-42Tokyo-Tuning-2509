@@ -120,6 +120,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
       - /da/tls:/da/tls:ro
       - nginx_logs:/var/log/nginx
+      - ./images:/app/images:ro
     networks:
       - webapp-network
     depends_on:

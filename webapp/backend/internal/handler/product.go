@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -121,37 +121,9 @@ func (h *ProductHandler) GetImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseImageDir := "/app/images"
-	fullPath := filepath.Join(baseImageDir, imagePath)
+	// nginx でキャッシュを無効化しており、画像の取得が毎回行われるので、レギュレーションに違反しない
+	accelURI := path.Join("/_protected/images", imagePath)
+	w.Header().Set("X-Accel-Redirect", accelURI)
 
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		fmt.Printf("画像ファイルが見つかりません: %s\n", fullPath)
-		http.Error(w, "画像が見つかりません", http.StatusNotFound)
-		return
-	}
-
-	ext := filepath.Ext(fullPath)
-	var contentType string
-	switch strings.ToLower(ext) {
-	case ".jpg", ".jpeg":
-		contentType = "image/jpeg"
-	case ".png":
-		contentType = "image/png"
-	case ".gif":
-		contentType = "image/gif"
-	case ".webp":
-		contentType = "image/webp"
-	default:
-		contentType = "application/octet-stream"
-	}
-	w.Header().Set("Content-Type", contentType)
-
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		fmt.Printf("画像ファイルの読み込みに失敗: %s\n", fullPath)
-		http.Error(w, "画像の読み込みに失敗しました", http.StatusInternalServerError)
-		return
-	}
-
-	w.Write(data)
+	w.WriteHeader(http.StatusOK)
 }
