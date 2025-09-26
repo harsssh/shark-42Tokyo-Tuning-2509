@@ -8,7 +8,6 @@ tasks:
   ####################
   #      Deploy      #
   ####################
-  # TODO: 見直し
   deploy:
     desc: 本番環境のデプロイ
     preconditions:
@@ -17,9 +16,8 @@ tasks:
     dir: webapp
     cmds:
       - task: checkout
-      - bash restart_container.sh
+      - bash -e restart_container.sh
 
-  # TODO: 見直し
   local:
     desc: ローカル環境のデプロイ
     preconditions:
@@ -27,26 +25,23 @@ tasks:
         msg: "ローカル環境のみ有効です"
     dir: webapp
     cmds:
-      - bash restart_container.sh
+      - bash -e restart_container.sh
 
-  # TODO: 見直し
   test:
     desc: テストを実行
     dir: webapp/e2e
     cmds:
-      - bash run_e2e_test.sh
+      - bash -e run_e2e_test.sh
 
-  # TODO: 見直し
   bench:
     desc: ベンチマークを実行
     cmds:
-      - bash run.sh
+      - bash -e run.sh
 
-  # TODO: 見直し
   restore:
     desc: データベースのリストア & マイグレーション
     cmds:
-      - bash restore_and_migration.sh
+      - bash -e restore_and_migration.sh
 
   ####################
   #     Utility      #
