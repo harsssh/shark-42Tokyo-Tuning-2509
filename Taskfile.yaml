@@ -45,7 +45,6 @@ tasks:
   # TODO: 見直し
   restore:
     desc: データベースのリストア & マイグレーション
-    dir: webapp
     cmds:
       - bash restore_and_migration.sh
 
