@@ -17,26 +17,37 @@ func NewProductRepository(db DBTX) *ProductRepository {
 // 商品一覧を全件取得し、アプリケーション側でページング処理を行う
 func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req model.ListRequest) ([]model.Product, int, error) {
 	var products []model.Product
+	var total int
+
 	baseQuery := `
-		SELECT product_id, name, value, weight, image, description
 		FROM products
 	`
-	args := []interface{}{}
+	args := []any{}
 
+	// 検索条件
 	if req.Search != "" {
-		// あいまい検索
 		baseQuery += " WHERE (name LIKE ? OR description LIKE ?)"
 		searchPattern := "%" + req.Search + "%"
 		args = append(args, searchPattern, searchPattern)
 	}
 
-	baseQuery += fmt.Sprintf(" ORDER BY %s %s, product_id ASC LIMIT %d OFFSET %d", req.SortField, req.SortOrder, req.PageSize, req.Offset)
-
-	err := r.db.SelectContext(ctx, &products, baseQuery, args...)
-	if err != nil {
+	// 件数をカウント
+	countQuery := "SELECT COUNT(*)" + baseQuery
+	if err := r.db.GetContext(ctx, &total, countQuery, args...); err != nil {
 		return nil, 0, err
 	}
 
-	total := len(products)
+	// ページング付きデータ取得
+	dataQuery := fmt.Sprintf(
+		`SELECT product_id, name, value, weight, image, description %s
+		 ORDER BY %s %s, product_id ASC
+		 LIMIT %d OFFSET %d`,
+		baseQuery, req.SortField, req.SortOrder, req.PageSize, req.Offset,
+	)
+
+	if err := r.db.SelectContext(ctx, &products, dataQuery, args...); err != nil {
+		return nil, 0, err
+	}
+
 	return products, total, nil
 }
