@@ -6,6 +6,8 @@ import (
 	"backend/internal/middleware"
 	"backend/internal/repository"
 	"backend/internal/service"
+	"backend/internal/telemetry"
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -95,6 +97,17 @@ func (s *Server) setupRoutes(
 }
 
 func (s *Server) Run() {
+	ctx := context.Background()
+	shutdown, err := telemetry.Init(ctx)
+	if err != nil {
+		log.Fatalf("Failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			log.Printf("Failed to shutdown telemetry: %v", err)
+		}
+	}()
+
 	appPort := os.Getenv("PORT")
 	if appPort == "" {
 		appPort = "8080"
