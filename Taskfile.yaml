@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+# https://taskfile.dev
+version: "3"
+
+# vars:
+
+tasks:
+  ####################
+  #      Deploy      #
+  ####################
+  # TODO: 見直し
+  deploy:
+    desc: 本番環境のデプロイ
+    preconditions:
+      - sh: '[[ "$(hostname)" =~ ^ftt ]]'
+        msg: "本番環境のみ有効です"
+    dir: webapp
+    cmds:
+      - task: checkout
+      - bash restart_container.sh
+
+  # TODO: 見直し
+  local:
+    desc: ローカル環境のデプロイ
+    preconditions:
+      - sh: '[[ ! "$(hostname)" =~ ^ftt ]]'
+        msg: "ローカル環境のみ有効です"
+    dir: webapp
+    cmds:
+      - bash restart_container.sh
+
+  # TODO: 見直し
+  test:
+    desc: テストを実行
+    dir: webapp/e2e
+    cmds:
+      - bash run_e2e_test.sh
+
+  # TODO: 見直し
+  bench:
+    desc: ベンチマークを実行
+    cmds:
+      - bash run.sh
+
+  # TODO: 見直し
+  restore:
+    desc: データベースのリストア & マイグレーション
+    dir: webapp
+    cmds:
+      - bash restore_and_migration.sh
+
+  ####################
+  #     Utility      #
+  ####################
+  checkout:
+    desc: リモートブランチに強制的にチェックアウト
+    vars:
+      BRANCH:
+        sh: if [[ -z "{{.CLI_ARGS}}" ]]; then git branch --show-current; else echo "{{.CLI_ARGS}}"; fi
+    cmds:
+      - git fetch --all
+      - git reset --hard origin/{{.BRANCH}}
+      - git switch -C {{.BRANCH}} origin/{{.BRANCH}}
+
+  ####################
+  #     Internal     #
+  ####################

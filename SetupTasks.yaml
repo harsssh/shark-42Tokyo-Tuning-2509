@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+# https://taskfile.dev
+version: "3"
+
+vars:
+  CMD_INSTALL_DIR: /usr/local/bin
+  DOCKER_NETWORK: shared_network
+  DOCKER_VOLUME: nginx_logs
+
+tasks:
+  ####################
+  #      Setup       #
+  ####################
+  all:
+    desc: すべてのセットアップタスクを実行
+    deps:
+      - enable-autocompletion
+      - gitconfig
+      - taskfile-symlink
+      - task-alias
+      - docker
+    cmds:
+      - task: install-tools
+
+  install-tools:
+    desc: ツールをインストール
+    cmds:
+      - sudo apt-get update -qq && sudo apt-get install -qq -y tree jq wget
+      - task: install-bottom
+      - task: install-bottom-config
+
+  docker:
+    desc: Docker環境の初期化（ネットワークとボリュームの作成）
+    cmds:
+      - docker network create {{.DOCKER_NETWORK}}
+      - docker volume create {{.DOCKER_VOLUME}}
+    status:
+      - docker network ls | grep -q {{.DOCKER_NETWORK}}
+      - docker volume ls | grep -q {{.DOCKER_VOLUME}}
+
+  docker-clean:
+    desc: Docker環境のクリーンアップ（ネットワークとボリュームの削除）
+    preconditions:
+      - sh: docker network ls | grep -q {{.DOCKER_NETWORK}} || docker volume ls | grep -q {{.DOCKER_VOLUME}}
+        msg: "Docker network or volume not found"
+    cmds:
+      - docker network rm {{.DOCKER_NETWORK}} || true
+      - docker volume rm {{.DOCKER_VOLUME}} || true
+
+  ####################
+  #     Utility      #
+  ####################
+
+  ####################
+  #     Internal     #
+  ####################
+  task-alias:
+    internal: true
+    cmds:
+      - echo 'alias task="task -g"' >> ~/.bashrc
+    status:
+      - grep 'alias task="task -g"' ~/.bashrc
+
+  enable-autocompletion:
+    internal: true
+    vars:
+      COMPLETION_FILE_URL: https://raw.githubusercontent.com/go-task/task/main/completion/bash/task.bash
+    cmds:
+      - sudo wget -qO /etc/bash_completion.d/task.bash {{.COMPLETION_FILE_URL}}
+      - sudo chmod +x /etc/bash_completion.d/task.bash
+    status:
+      - test -f /etc/bash_completion.d/task.bash
+
+  taskfile-symlink:
+    internal: true
+    cmds:
+      - ln -s {{.TASKFILE_DIR}}/Taskfile.yaml ~/Taskfile.yaml
+    status:
+      - test -L ~/Taskfile.yaml
+
+  gitconfig:
+    internal: true
+    cmds:
+      - git config --global user.name server
+      - git config --global user.email server@example.com
+      - git config --global core.editor vim
+      - git config --global pull.rebase true
+    status:
+      - git config --global --get user.name
+      - git config --global --get user.email
+      - git config --global --get core.editor
+
+  install-bottom:
+    internal: true
+    vars:
+      BOTTOM_VERSION: "0.11.1"
+      BOTTOM_DOWNLOAD_URL: https://github.com/ClementTsang/bottom/releases/download/{{.BOTTOM_VERSION}}/bottom_{{.BOTTOM_VERSION}}-1_amd64.deb
+    dir: /tmp
+    cmds:
+      - wget -qO bottom.deb {{.BOTTOM_DOWNLOAD_URL}}
+      - sudo dpkg -i bottom.deb
+    status:
+      - dpkg -l | grep bottom
+
+  install-bottom-config:
+    internal: true
+    cmds:
+      - mkdir -p ~/.config/bottom
+      - cp ./config/bottom.toml ~/.config/bottom/bottom.toml
+    status:
+      - diff ./config/bottom.toml ~/.config/bottom/bottom.toml &> /dev/null
