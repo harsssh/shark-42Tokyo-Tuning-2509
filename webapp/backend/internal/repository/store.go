@@ -22,11 +22,11 @@ func newStore(db DBTX, orderState *orderRepoState) *Store {
 	store := &Store{
 		db:             db,
 		orderRepoState: orderState,
+		UserRepo:       NewUserRepository(db),
+		SessionRepo:    NewSessionRepository(db),
+		ProductRepo:    NewProductRepository(db),
+		OrderRepo:      newOrderRepository(db, orderState),
 	}
-	store.UserRepo = NewUserRepository(db)
-	store.SessionRepo = NewSessionRepository(db)
-	store.ProductRepo = NewProductRepository(db)
-	store.OrderRepo = newOrderRepository(db, store.orderRepoState)
 	return store
 }
 
