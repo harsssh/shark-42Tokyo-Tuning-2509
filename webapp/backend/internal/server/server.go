@@ -92,6 +92,18 @@ func (s *Server) setupRoutes(
 }
 
 func (s *Server) Run() {
+	// pprotein 用
+	tcpSrv := &http.Server{
+		Addr:    ":8080",
+		Handler: s.Router,
+	}
+	go func() {
+		log.Printf("Starting server on tcp :8080")
+		if err := tcpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("tcp server error: %v", err)
+		}
+	}()
+
 	socketPath := os.Getenv("APP_SOCKET_PATH")
 	if socketPath == "" {
 		socketPath = "/var/run/app/app.sock"
@@ -106,12 +118,12 @@ func (s *Server) Run() {
 		log.Printf("chmod socket: %v", err)
 	}
 
-	srv := &http.Server{
+	unixSrv := &http.Server{
 		Handler: s.Router,
 	}
 
 	log.Printf("Starting server on unix socket %s", socketPath)
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := unixSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server error: %v", err)
 	}
 }
