@@ -13,7 +13,13 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-const orderListCountCacheSize = 128
+const (
+	orderListCountCacheSize = 128
+	// 本来はモデルにあるべきそう
+	shippedStatusEnumShipping   = 0
+	shippedStatusEnumDelivering = 1
+	shippedStatusEnumCompleted  = 2
+)
 
 type orderCountCacheKey struct {
 	userID        int
@@ -155,9 +161,9 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
             p.value
         FROM orders o
         JOIN products p ON o.product_id = p.product_id
-        WHERE o.shipped_status = 'shipping'
+        WHERE o.shipped_status_code = ?
     `
-	err := r.db.SelectContext(ctx, &orders, query)
+	err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping)
 
 	return orders, err
 }

@@ -1,6 +1,6 @@
 ALTER TABLE products
-    ALGORITHM=INPLACE,
-    LOCK=NONE,
+    ALGORITHM = INPLACE,
+    LOCK = NONE,
     ADD INDEX idx_products_value_product_id (value DESC, product_id),
     ADD INDEX idx_products_value_desc_product_id (value, product_id),
     ADD INDEX idx_products_weight_desc_product_id (weight DESC, product_id),
@@ -12,15 +12,25 @@ ALTER TABLE products
 
 -- ログインの改善
 ALTER TABLE users
-    ALGORITHM=INPLACE,
-    LOCK=NONE,
+    ALGORITHM = INPLACE,
+    LOCK = NONE,
     ADD INDEX idx_users_user_name (user_name);
 
+-- delivery plan を作るときの orders の取得用
 ALTER TABLE orders
-    ALGORITHM=INPLACE,
-    LOCK=NONE,
-    -- delivery plan を作るときの orders の join に使う (covering index)
-    ADD INDEX idx_orders_shipped_status_product_id_order_id (shipped_status, product_id, order_id),
+    LOCK = SHARED,
+    ADD COLUMN shipped_status_code TINYINT
+        AS (CASE shipped_status
+                WHEN 'shipping' THEN 0
+                WHEN 'delivering' THEN 1
+                WHEN 'completed' THEN 2
+            END
+            ) STORED,
+    ADD INDEX idx_orders_shipped_status_product_id_order_id (shipped_status_code, product_id, order_id);
+
+ALTER TABLE orders
+    ALGORITHM = INPLACE,
+    LOCK = NONE,
     ADD INDEX idx_orders_user_id_shipped_status_order_id (user_id, shipped_status, order_id),
     ADD INDEX idx_orders_user_id_created_at (user_id, created_at),
     ADD INDEX idx_orders_user_id_order_id (user_id, order_id);
