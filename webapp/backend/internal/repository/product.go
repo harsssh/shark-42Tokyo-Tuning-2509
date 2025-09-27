@@ -4,6 +4,7 @@ import (
 	"backend/internal/model"
 	"context"
 	"fmt"
+	"strings"
 )
 
 type ProductRepository struct {
@@ -15,37 +16,41 @@ func NewProductRepository(db DBTX) *ProductRepository {
 }
 
 // 商品一覧を全件取得し、アプリケーション側でページング処理を行う
-func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req model.ListRequest) ([]model.Product, int, error) {
-	var products []model.Product
-	var total int
+// type の考慮どこいった??
+func (r *ProductRepository) ListProducts(
+	ctx context.Context,
+	userID int,
+	req model.ListRequest,
+) ([]model.Product, int, error) {
+	where := ""
+	args := make([]interface{}, 0, 1)
 
-	baseQuery := `
-		FROM products
-	`
-	var args []any
-
-	// 検索条件
-	if req.Search != "" {
-		baseQuery += " WHERE MATCH(name, description) AGAINST (? IN BOOLEAN MODE)"
-		searchPattern := "*" + req.Search + "*"
-		args = append(args, searchPattern)
+	if s := strings.TrimSpace(req.Search); s != "" {
+		where = "WHERE MATCH(name, description) AGAINST (? IN BOOLEAN MODE)"
+		args = append(args, "*"+s+"*")
 	}
 
-	// 件数をカウント
-	countQuery := "SELECT COUNT(*)" + baseQuery
-	if err := r.db.GetContext(ctx, &total, countQuery, args...); err != nil {
+	// 総件数
+	var total int
+	countSQL := "SELECT COUNT(1) FROM products " + where
+	if err := r.db.GetContext(ctx, &total, countSQL, args...); err != nil {
 		return nil, 0, err
 	}
 
-	// ページング付きデータ取得
-	dataQuery := fmt.Sprintf(
-		`SELECT product_id, name, value, weight, image, description %s
-		 ORDER BY %s %s, product_id ASC
-		 LIMIT %d OFFSET %d`,
-		baseQuery, req.SortField, req.SortOrder, req.PageSize, req.Offset,
+	// データ取得（ORDER BY の列名・並び順をそのまま埋め込む）
+	query := fmt.Sprintf(`
+		SELECT product_id, name, value, weight, image, description
+		FROM products
+		%s
+		ORDER BY %s %s, product_id ASC
+		LIMIT ? OFFSET ?`,
+		where, req.SortField, req.SortOrder,
 	)
 
-	if err := r.db.SelectContext(ctx, &products, dataQuery, args...); err != nil {
+	dataArgs := append(args, req.PageSize, req.Offset)
+
+	var products []model.Product
+	if err := r.db.SelectContext(ctx, &products, query, dataArgs...); err != nil {
 		return nil, 0, err
 	}
 
