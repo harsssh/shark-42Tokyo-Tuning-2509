@@ -15,10 +15,7 @@ import (
 
 const (
 	orderListCountCacheSize = 128
-	// 本来はモデルにあるべきそう
-	shippedStatusEnumShipping   = 2
-	shippedStatusEnumDelivering = 1
-	shippedStatusEnumCompleted  = 0
+	shippedStatusShipping   = "shipping"
 )
 
 type orderCountCacheKey struct {
@@ -30,6 +27,11 @@ type orderRepoState struct {
 	shippingOrdersVersion int64
 	countCache            *lru.Cache[orderCountCacheKey, int]
 	mu                    sync.RWMutex
+}
+
+type shippingOrderRecord struct {
+	OrderID   int64 `db:"order_id"`
+	ProductID int   `db:"product_id"`
 }
 
 type OrderRepository struct {
@@ -93,6 +95,53 @@ func (r *OrderRepository) setCachedOrderCount(key orderCountCacheKey, total int)
 	cache.Add(key, total)
 }
 
+func (r *OrderRepository) upsertShippingOrders(ctx context.Context, exec DBTX, records []shippingOrderRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	txx, ok := exec.(*sqlx.Tx)
+	if !ok {
+		return fmt.Errorf("upsertShippingOrders must be called within a transaction")
+	}
+
+	_, err := txx.NamedExecContext(ctx, `
+		INSERT INTO shipping_orders (order_id, product_id)
+		VALUES (:order_id, :product_id)
+		ON DUPLICATE KEY UPDATE product_id = VALUES(product_id)
+	`, records)
+	return err
+}
+
+func (r *OrderRepository) deleteShippingOrders(ctx context.Context, exec DBTX, orderIDs []int64) error {
+	if len(orderIDs) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In("DELETE FROM shipping_orders WHERE order_id IN (?)", orderIDs)
+	if err != nil {
+		return err
+	}
+	query = exec.Rebind(query)
+	_, err = exec.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (r *OrderRepository) loadShippingOrderRecords(ctx context.Context, exec DBTX, orderIDs []int64) ([]shippingOrderRecord, error) {
+	if len(orderIDs) == 0 {
+		return []shippingOrderRecord{}, nil
+	}
+	query, args, err := sqlx.In("SELECT order_id, product_id FROM orders WHERE order_id IN (?)", orderIDs)
+	if err != nil {
+		return nil, err
+	}
+	query = exec.Rebind(query)
+	records := make([]shippingOrderRecord, 0, len(orderIDs))
+	if err := exec.SelectContext(ctx, &records, query, args...); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 // ダメだったら Create を復旧する
 func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order) ([]string, error) {
 	if len(orders) == 0 {
@@ -114,19 +163,23 @@ func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order
 
 	r.onUpdateOrders()
 
-	// NOTE: 結構怖い
-	var insertedIDs []string
 	lastID, err := result.LastInsertId()
 	if err != nil {
 		return nil, err
 	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
+	firstID := lastID - int64(len(orders)) + 1
+	shippingRecords := lo.Map(orders, func(order *model.Order, idx int) shippingOrderRecord {
+		return shippingOrderRecord{
+			OrderID:   firstID + int64(idx),
+			ProductID: order.ProductID,
+		}
+	})
+	if err := r.upsertShippingOrders(ctx, txx, shippingRecords); err != nil {
 		return nil, err
 	}
-	for i := int64(0); i < rowsAffected; i++ {
-		insertedIDs = append(insertedIDs, fmt.Sprintf("%d", lastID+i))
-	}
+	insertedIDs := lo.Map(shippingRecords, func(rec shippingOrderRecord, _ int) string {
+		return fmt.Sprintf("%d", rec.OrderID)
+	})
 
 	return insertedIDs, nil
 }
@@ -142,13 +195,19 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 		return err
 	}
 	query = r.db.Rebind(query)
-	_, err = r.db.ExecContext(ctx, query, args...)
 
-	if err == nil {
-		r.onUpdateOrders()
+	if _, err = r.db.ExecContext(ctx, query, args...); err != nil {
+		return err
 	}
 
-	return err
+	// shipping から変更された想定
+	if err := r.deleteShippingOrders(ctx, r.db, orderIDs); err != nil {
+		return err
+	}
+
+	r.onUpdateOrders()
+
+	return nil
 }
 
 // 配送中(shipped_status:shipping)の注文一覧を取得
@@ -156,14 +215,14 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
 	var orders []model.Order
 	query := `
         SELECT
-            o.order_id,
+            so.order_id,
             p.weight,
             p.value
-        FROM orders o
-        JOIN products p ON o.product_id = p.product_id
-        WHERE o.shipped_status_code = ?
+        FROM shipping_orders so
+        JOIN products p ON so.product_id = p.product_id
+        ORDER BY so.order_id
     `
-	err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping)
+	err := r.db.SelectContext(ctx, &orders, query)
 
 	return orders, err
 }

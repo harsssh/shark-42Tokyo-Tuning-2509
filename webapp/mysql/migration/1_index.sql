@@ -16,18 +16,6 @@ ALTER TABLE users
     LOCK = NONE,
     ADD INDEX idx_users_user_name (user_name);
 
--- delivery plan を作るときの orders の取得用
-ALTER TABLE orders
-    LOCK = SHARED,
-    ADD COLUMN shipped_status_code TINYINT
-        AS (CASE shipped_status
-            -- completed < delivering < shipping の順番
-                WHEN 'completed' THEN 0
-                WHEN 'delivering' THEN 1
-                WHEN 'shipping' THEN 2
-            END
-            ) STORED;
-
 ALTER TABLE orders
     ALGORITHM = INPLACE,
     LOCK = NONE,
