@@ -1,14 +1,16 @@
-ALTER TABLE products
-    ALGORITHM=INPLACE,
-    -- products の検索用
-    ADD FULLTEXT INDEX ft_idx_products_name_description (name, description) WITH PARSER ngram;
+# ALTER TABLE products
+#     ALGORITHM=INPLACE,
+#     -- products の検索用
+#     ADD FULLTEXT INDEX ft_idx_products_name_description (name, description) WITH PARSER ngram;
+#
+# -- fulltext index は 1 度に 1 つしか作れないので分ける
+# ALTER TABLE products
+#     ALGORITHM=INPLACE,
+#     -- orders の検索用
+#     ADD FULLTEXT INDEX ft_idx_name (name) WITH PARSER ngram,
+#     ADD INDEX idx_name (name);
 
--- fulltext index は 1 度に 1 つしか作れないので分ける
-ALTER TABLE products
-    ALGORITHM=INPLACE,
-    -- orders の検索用
-    ADD FULLTEXT INDEX ft_idx_name (name) WITH PARSER ngram,
-    ADD INDEX idx_name (name);
+ALTER TABLE products ADD INDEX idx_products_name (name);
 
 -- ログインの改善
 ALTER TABLE users
