@@ -10,12 +10,15 @@ services:
       target: production
     environment:
       TZ: Asia/Tokyo
-      DATABASE_URL: "user:password@tcp(db:3306)/42tokyo2508-db"
+      DATABASE_URL: user:password@unix(/var/run/mysqld/mysqld.sock)/42tokyo2508-db
+      APP_SOCKET_PATH: /var/run/app/app.sock
     ports:
       - "8080:8080"
     working_dir: /usr/src/backend
     volumes:
       - ./images:/app/images:ro
+      - mysql_socket:/var/run/mysqld
+      - app_socket:/var/run/app
     networks:
       - webapp-network
     depends_on:
@@ -27,6 +30,8 @@ services:
           "CMD",
           "curl",
           "-I",
+          "--unix-socket",
+          "/var/run/app/app.sock",
           "http://localhost:8080/api/health",
           "-X",
           "GET",
@@ -85,6 +90,7 @@ services:
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/data:/var/lib/mysql
       - mysql_logs:/var/log/mysql
+      - mysql_socket:/var/run/mysqld
     networks:
       - webapp-network
     healthcheck:
@@ -118,6 +124,7 @@ services:
       - /da/tls:/da/tls:ro
       - nginx_logs:/var/log/nginx
       - ./images:/app/images:ro
+      - app_socket:/var/run/app
     networks:
       - webapp-network
     depends_on:
@@ -152,3 +159,5 @@ networks:
 volumes:
   nginx_logs:
   mysql_logs:
+  mysql_socket:
+  app_socket:
