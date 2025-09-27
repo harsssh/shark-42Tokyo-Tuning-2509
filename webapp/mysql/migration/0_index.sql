@@ -2,10 +2,10 @@ ALTER TABLE products
     ALGORITHM=INPLACE,
     LOCK=NONE,
     ADD INDEX idx_products_value_product_id (value DESC, product_id),
-    ADD INDEX idx_products_value_product_id (value, product_id),
-    ADD INDEX idx_products_weight_product_id (weight DESC, product_id),
+    ADD INDEX idx_products_value_desc_product_id (value, product_id),
+    ADD INDEX idx_products_weight_desc_product_id (weight DESC, product_id),
     ADD INDEX idx_products_weight_product_id (weight, product_id),
-    ADD INDEX idx_products_name_product_id (name DESC, product_id),
+    ADD INDEX idx_products_name_desc_product_id (name DESC, product_id),
     ADD INDEX idx_products_name_product_id (name, product_id),
     ADD INDEX idx_products_name (name),
     ADD INDEX idx_products_product_id_weight_value (product_id, weight, value);
