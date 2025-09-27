@@ -10,6 +10,10 @@ ALTER TABLE products
     ADD INDEX idx_products_name (name),
     ADD INDEX idx_products_product_id_weight_value (product_id, weight, value);
 
+ALTER TABLE products
+    ALGORITHM=INPLACE,
+    ADD FULLTEXT INDEX ft_idx_products_name (name) WITH PARSER ngram;
+
 -- ログインの改善
 ALTER TABLE users
     ALGORITHM=INPLACE,
