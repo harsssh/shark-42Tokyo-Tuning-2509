@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -59,7 +60,7 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 				return err
 			}
 			if len(orders) == 0 {
-				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, capacity); err != nil {
+				if err := s.replenishShippingOrders(ctx, txStore, nil, shippingPoolTarget, capacity); err != nil {
 					log.Printf("Failed to replenish shipping orders: %v", err)
 				}
 				orders, err = txStore.OrderRepo.GetShippingOrders(ctx)
@@ -72,11 +73,7 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 				return err
 			}
 			if len(plan.Orders) == 0 {
-				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, capacity); err == nil {
-					orders, err = txStore.OrderRepo.GetShippingOrders(ctx)
-					if err != nil {
-						return err
-					}
+				if err := s.replenishShippingOrders(ctx, txStore, &orders, shippingPoolTarget, capacity); err == nil {
 					plan, err = bestSelectOrdersForDelivery(ctx, orders, robotID, capacity)
 					if err != nil {
 						return err
@@ -124,7 +121,7 @@ func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, new
 			}
 			if newStatus == "completed" {
 				hint := defaultRobotCapacityHint
-				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, hint); err != nil {
+				if err := s.replenishShippingOrders(ctx, txStore, nil, shippingPoolTarget, hint); err != nil {
 					log.Printf("Failed to replenish shipping orders after completion: %v", err)
 				}
 			}
@@ -546,10 +543,16 @@ func lightLocalSearch(ctx context.Context, currentOrders []model.Order, allOrder
 	return bestOrders, bestValue
 }
 
-func (s *RobotService) replenishShippingOrders(ctx context.Context, txStore *repository.Store, minPool int, capacityHint int) error {
-	existing, err := txStore.OrderRepo.GetShippingOrders(ctx)
-	if err != nil {
-		return err
+func (s *RobotService) replenishShippingOrders(ctx context.Context, txStore *repository.Store, orders *[]model.Order, minPool int, capacityHint int) error {
+	var existing []model.Order
+	var err error
+	if orders != nil {
+		existing = *orders
+	} else {
+		existing, err = txStore.OrderRepo.GetShippingOrders(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if len(existing) >= minPool {
 		return nil
@@ -575,8 +578,33 @@ func (s *RobotService) replenishShippingOrders(ctx context.Context, txStore *rep
 			ProductID: p.ProductID,
 		})
 	}
-	_, err = txStore.OrderRepo.BatchCreate(ctx, ordersToCreate)
-	return err
+	inserted, err := txStore.OrderRepo.BatchCreate(ctx, ordersToCreate)
+	if err != nil {
+		return err
+	}
+	if orders != nil && len(inserted) > 0 {
+		newOrders := make([]model.Order, 0, len(inserted))
+		for i, idStr := range inserted {
+			id, convErr := strconv.ParseInt(idStr, 10, 64)
+			if convErr != nil {
+				continue
+			}
+			newOrders = append(newOrders, model.Order{
+				OrderID:       id,
+				UserID:        ordersToCreate[i].UserID,
+				ProductID:     ordersToCreate[i].ProductID,
+				Weight:        products[i].Weight,
+				Value:         products[i].Value,
+				ShippedStatus: "shipping",
+			})
+		}
+		combined := append(existing, newOrders...)
+		sort.Slice(combined, func(i, j int) bool {
+			return combined[i].OrderID < combined[j].OrderID
+		})
+		*orders = combined
+	}
+	return nil
 }
 
 func (s *RobotService) getLightweightProducts(ctx context.Context, txStore *repository.Store, maxWeight, limit int) ([]model.Product, error) {
