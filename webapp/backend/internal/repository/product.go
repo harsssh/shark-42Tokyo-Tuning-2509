@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	lru "github.com/hashicorp/golang-lru/v2"
-	"github.com/labstack/gommon/log"
+	"log"
 	"strings"
 )
 
