@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/labstack/gommon/log"
 	"strings"
 )
 
@@ -51,6 +52,7 @@ func (r *ProductRepository) ListProducts(
 			return nil, 0, err
 		}
 		r.cache.Add(totalCacheKey, total)
+		log.Printf("ListProducts: cache len=%d\n", r.cache.Len())
 	}
 
 	// データ取得（ORDER BY の列名・並び順をそのまま埋め込む）

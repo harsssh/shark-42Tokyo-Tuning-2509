@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"log"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -110,6 +111,7 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
 	// 成功してたらキャッシュ
 	if err == nil {
 		r.cache.Add(shippingOrderCacheKey, orders)
+		log.Printf("GetShippingOrders: cache len=%d\n", r.cache.Len())
 	}
 
 	return orders, err
