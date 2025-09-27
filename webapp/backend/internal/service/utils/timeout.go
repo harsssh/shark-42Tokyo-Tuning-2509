@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var defaultTimeout = 30 * time.Second
+var defaultTimeout = 20 * time.Second
 
 // 終わらない処理などによる無限ループを防ぐため、タイムアウト付きで処理を実行する
 func WithTimeout(parent context.Context, fn func(ctx context.Context) error) error {
