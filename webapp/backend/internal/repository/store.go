@@ -7,21 +7,31 @@ import (
 )
 
 type Store struct {
-	db          DBTX
-	UserRepo    *UserRepository
-	SessionRepo *SessionRepository
-	ProductRepo *ProductRepository
-	OrderRepo   *OrderRepository
+	db             DBTX
+	orderRepoState *orderRepoState
+	UserRepo       *UserRepository
+	SessionRepo    *SessionRepository
+	ProductRepo    *ProductRepository
+	OrderRepo      *OrderRepository
+}
+
+func newStore(db DBTX, orderState *orderRepoState) *Store {
+	if orderState == nil {
+		orderState = &orderRepoState{}
+	}
+	store := &Store{
+		db:             db,
+		orderRepoState: orderState,
+		UserRepo:       NewUserRepository(db),
+		SessionRepo:    NewSessionRepository(db),
+		ProductRepo:    NewProductRepository(db),
+		OrderRepo:      newOrderRepository(db, orderState),
+	}
+	return store
 }
 
 func NewStore(db DBTX) *Store {
-	return &Store{
-		db:          db,
-		UserRepo:    NewUserRepository(db),
-		SessionRepo: NewSessionRepository(db),
-		ProductRepo: NewProductRepository(db),
-		OrderRepo:   NewOrderRepository(db),
-	}
+	return newStore(db, &orderRepoState{})
 }
 
 func (s *Store) ExecTx(ctx context.Context, fn func(txStore *Store) error) error {
@@ -36,7 +46,7 @@ func (s *Store) ExecTx(ctx context.Context, fn func(txStore *Store) error) error
 	}
 	defer tx.Rollback()
 
-	txStore := NewStore(tx)
+	txStore := newStore(tx, s.orderRepoState)
 	if err := fn(txStore); err != nil {
 		return err
 	}

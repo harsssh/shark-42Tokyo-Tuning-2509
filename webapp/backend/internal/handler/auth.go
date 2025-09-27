@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"log"
 	"net/http"
 
 	"backend/internal/model"
@@ -20,8 +19,6 @@ func NewAuthHandler(authSvc *service.AuthService) *AuthHandler {
 
 // ログイン時にセッションを発行し、Cookieにセットする
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	log.Println("-> Received request for /api/login")
-
 	var req model.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

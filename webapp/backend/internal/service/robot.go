@@ -5,22 +5,42 @@ import (
 	"backend/internal/repository"
 	"backend/internal/service/utils"
 	"context"
+	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/samber/lo"
 	"log"
 )
 
+const planCacheSize = 1024
+
+type planCacheKey struct {
+	ordersVersion int64
+	capacity      int
+}
+
 type RobotService struct {
-	store *repository.Store
+	store     *repository.Store
+	planCache *lru.Cache[planCacheKey, model.DeliveryPlan]
 }
 
 func NewRobotService(store *repository.Store) *RobotService {
-	return &RobotService{store: store}
+	return &RobotService{store: store, planCache: lo.Must(lru.New[planCacheKey, model.DeliveryPlan](planCacheSize))}
 }
 
 func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string, capacity int) (*model.DeliveryPlan, error) {
 	var plan model.DeliveryPlan
 
+	cacheKey := planCacheKey{
+		ordersVersion: lo.Must(s.store.OrderRepo.GetShippingOrdersVersion(ctx)),
+		capacity:      capacity,
+	}
+	if v, ok := s.planCache.Get(cacheKey); ok {
+		v.RobotID = robotID
+		return &v, nil
+	}
+
 	err := utils.WithTimeout(ctx, func(ctx context.Context) error {
 		return s.store.ExecTx(ctx, func(txStore *repository.Store) error {
+
 			orders, err := txStore.OrderRepo.GetShippingOrders(ctx)
 			if err != nil {
 				return err
@@ -46,6 +66,10 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 	if err != nil {
 		return nil, err
 	}
+
+	// 元のバージョンをキーにキャッシュすることで、配送ステータス更新後の再計算を促す
+	s.planCache.Add(cacheKey, plan)
+
 	return &plan, nil
 }
 
@@ -53,60 +77,6 @@ func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, new
 	return utils.WithTimeout(ctx, func(ctx context.Context) error {
 		return s.store.OrderRepo.UpdateStatuses(ctx, []int64{orderID}, newStatus)
 	})
-}
-
-func selectOrdersForDelivery(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
-	n := len(orders)
-	bestValue := 0
-	var bestSet []model.Order
-	steps := 0
-	checkEvery := 16384
-
-	var dfs func(i, curWeight, curValue int, curSet []model.Order) bool
-	dfs = func(i, curWeight, curValue int, curSet []model.Order) bool {
-		if curWeight > robotCapacity {
-			return false
-		}
-		steps++
-		if checkEvery > 0 && steps%checkEvery == 0 {
-			select {
-			case <-ctx.Done():
-				return true
-			default:
-			}
-		}
-		if i == n {
-			if curValue > bestValue {
-				bestValue = curValue
-				bestSet = append([]model.Order{}, curSet...)
-			}
-			return false
-		}
-
-		if dfs(i+1, curWeight, curValue, curSet) {
-			return true
-		}
-
-		order := orders[i]
-		return dfs(i+1, curWeight+order.Weight, curValue+order.Value, append(curSet, order))
-	}
-
-	canceled := dfs(0, 0, 0, nil)
-	if canceled {
-		return model.DeliveryPlan{}, ctx.Err()
-	}
-
-	var totalWeight int
-	for _, o := range bestSet {
-		totalWeight += o.Weight
-	}
-
-	return model.DeliveryPlan{
-		RobotID:     robotID,
-		TotalWeight: totalWeight,
-		TotalValue:  bestValue,
-		Orders:      bestSet,
-	}, nil
 }
 
 func bestSelectOrdersForDelivery(
