@@ -16,9 +16,9 @@ import (
 const (
 	orderListCountCacheSize = 128
 	// 本来はモデルにあるべきそう
-	shippedStatusEnumShipping   = 0
+	shippedStatusEnumShipping   = 2
 	shippedStatusEnumDelivering = 1
-	shippedStatusEnumCompleted  = 2
+	shippedStatusEnumCompleted  = 0
 )
 
 type orderCountCacheKey struct {
@@ -287,7 +287,7 @@ func buildOrderBy(field, order string) string {
 	case "created_at":
 		return "ORDER BY o.created_at " + dir
 	case "shipped_status":
-		return "ORDER BY o.shipped_status " + dir
+		return "ORDER BY o.shipped_status_code " + dir
 	case "arrived_at":
 		// ASC: NULLS FIRST, DESC: NULLS LAST（既存仕様どおり）
 		if dir == "DESC" {
