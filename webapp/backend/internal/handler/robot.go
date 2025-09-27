@@ -3,7 +3,7 @@ package handler
 import (
 	"backend/internal/model"
 	"backend/internal/service"
-	"encoding/json"
+	"github.com/goccy/go-json"
 	"log"
 	"net/http"
 	"strconv"
