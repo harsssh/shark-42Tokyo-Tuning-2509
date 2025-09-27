@@ -5,29 +5,36 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	lru "github.com/hashicorp/golang-lru/v2"
 	"strings"
+	"sync"
 
 	"github.com/jmoiron/sqlx"
 )
 
-const (
-	shippingOrderCacheSize = 1024
-	shippingOrderCacheKey  = "shipping_orders_v1"
-)
-
 type OrderRepository struct {
-	db DBTX
-	// 頻繁に purge されるので、効果があるか分からない
-	cache *lru.Cache[string, []model.Order]
+	db                    DBTX
+	shippingOrdersVersion int64
+	mu                    sync.RWMutex
 }
 
 func NewOrderRepository(db DBTX) *OrderRepository {
-	cache, err := lru.New[string, []model.Order](shippingOrderCacheSize)
-	if err != nil {
-		panic(err)
+	return &OrderRepository{
+		db:                    db,
+		shippingOrdersVersion: 0,
+		mu:                    sync.RWMutex{},
 	}
-	return &OrderRepository{db: db, cache: cache}
+}
+
+func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.shippingOrdersVersion, nil
+}
+
+func (r *OrderRepository) incrementShippingOrdersVersion() {
+	r.mu.Lock()
+	r.shippingOrdersVersion++
+	r.mu.Unlock()
 }
 
 // ダメだったら Create を復旧する
@@ -49,7 +56,7 @@ func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order
 		return nil, err
 	}
 
-	r.cache.Purge()
+	r.incrementShippingOrdersVersion()
 
 	// NOTE: 結構怖い
 	var insertedIDs []string
@@ -81,9 +88,8 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 	query = r.db.Rebind(query)
 	_, err = r.db.ExecContext(ctx, query, args...)
 
-	// キャッシュを削除
 	if err == nil {
-		r.cache.Purge()
+		r.incrementShippingOrdersVersion()
 	}
 
 	return err
@@ -91,10 +97,6 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 
 // 配送中(shipped_status:shipping)の注文一覧を取得
 func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order, error) {
-	if v, ok := r.cache.Get(shippingOrderCacheKey); ok {
-		return v, nil
-	}
-
 	var orders []model.Order
 	query := `
         SELECT
@@ -106,11 +108,6 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
         WHERE o.shipped_status = 'shipping'
     `
 	err := r.db.SelectContext(ctx, &orders, query)
-
-	// 成功してたらキャッシュ
-	if err == nil {
-		r.cache.Add(shippingOrderCacheKey, orders)
-	}
 
 	return orders, err
 }
