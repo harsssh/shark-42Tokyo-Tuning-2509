@@ -34,3 +34,9 @@ ALTER TABLE products
     ADD INDEX idx_name_product_id (name, product_id),
     ADD INDEX idx_value_product_id (value, product_id),
     ADD INDEX idx_weight_product_id (weight, product_id);
+
+-- 軽量商品の検索用（weight <= ? ORDER BY weight, value）
+ALTER TABLE products
+    ALGORITHM=INPLACE,
+    LOCK=NONE,
+    ADD INDEX idx_products_weight_value_pid (weight, value, product_id);

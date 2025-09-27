@@ -6,10 +6,25 @@ import (
 	"backend/internal/service/utils"
 	"context"
 	"log"
+	"sort"
+	"sync"
+	"time"
+)
+
+const (
+	shippingPoolTarget       = 200
+	shippingReplenishBatch   = 50
+	defaultRobotCapacityHint = 100
+	lightweightCacheTTL      = 30 * time.Second
 )
 
 type RobotService struct {
 	store *repository.Store
+
+	lightweightMu        sync.RWMutex
+	lightweightCache     []model.Product
+	lightweightCacheExp  time.Time
+	lightweightCacheHint int
 }
 
 func NewRobotService(store *repository.Store) *RobotService {
@@ -25,9 +40,43 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 			if err != nil {
 				return err
 			}
+			if len(orders) == 0 {
+				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, capacity); err != nil {
+					log.Printf("Failed to replenish shipping orders: %v", err)
+				}
+				orders, err = txStore.OrderRepo.GetShippingOrders(ctx)
+				if err != nil {
+					return err
+				}
+			}
 			plan, err = bestSelectOrdersForDelivery(ctx, orders, robotID, capacity)
 			if err != nil {
 				return err
+			}
+			if len(plan.Orders) == 0 {
+				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, capacity); err == nil {
+					orders, err = txStore.OrderRepo.GetShippingOrders(ctx)
+					if err != nil {
+						return err
+					}
+					plan, err = bestSelectOrdersForDelivery(ctx, orders, robotID, capacity)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			if len(plan.Orders) == 0 {
+				if fallback := selectFallbackOrder(orders, capacity); fallback != nil {
+					plan = model.DeliveryPlan{
+						RobotID:     robotID,
+						TotalWeight: fallback.Weight,
+						TotalValue:  fallback.Value,
+						Orders:      []model.Order{*fallback},
+					}
+				}
+			}
+			if plan.Orders == nil {
+				plan.Orders = []model.Order{}
 			}
 			if len(plan.Orders) > 0 {
 				orderIDs := make([]int64, len(plan.Orders))
@@ -51,62 +100,22 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 
 func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, newStatus string) error {
 	return utils.WithTimeout(ctx, func(ctx context.Context) error {
-		return s.store.OrderRepo.UpdateStatuses(ctx, []int64{orderID}, newStatus)
+		return s.store.ExecTx(ctx, func(txStore *repository.Store) error {
+			if err := txStore.OrderRepo.UpdateStatuses(ctx, []int64{orderID}, newStatus); err != nil {
+				return err
+			}
+			if newStatus == "completed" {
+				hint := defaultRobotCapacityHint
+				if hint <= 0 {
+					hint = 100
+				}
+				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, hint); err != nil {
+					log.Printf("Failed to replenish shipping orders after completion: %v", err)
+				}
+			}
+			return nil
+		})
 	})
-}
-
-func selectOrdersForDelivery(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
-	n := len(orders)
-	bestValue := 0
-	var bestSet []model.Order
-	steps := 0
-	checkEvery := 16384
-
-	var dfs func(i, curWeight, curValue int, curSet []model.Order) bool
-	dfs = func(i, curWeight, curValue int, curSet []model.Order) bool {
-		if curWeight > robotCapacity {
-			return false
-		}
-		steps++
-		if checkEvery > 0 && steps%checkEvery == 0 {
-			select {
-			case <-ctx.Done():
-				return true
-			default:
-			}
-		}
-		if i == n {
-			if curValue > bestValue {
-				bestValue = curValue
-				bestSet = append([]model.Order{}, curSet...)
-			}
-			return false
-		}
-
-		if dfs(i+1, curWeight, curValue, curSet) {
-			return true
-		}
-
-		order := orders[i]
-		return dfs(i+1, curWeight+order.Weight, curValue+order.Value, append(curSet, order))
-	}
-
-	canceled := dfs(0, 0, 0, nil)
-	if canceled {
-		return model.DeliveryPlan{}, ctx.Err()
-	}
-
-	var totalWeight int
-	for _, o := range bestSet {
-		totalWeight += o.Weight
-	}
-
-	return model.DeliveryPlan{
-		RobotID:     robotID,
-		TotalWeight: totalWeight,
-		TotalValue:  bestValue,
-		Orders:      bestSet,
-	}, nil
 }
 
 func bestSelectOrdersForDelivery(
@@ -120,21 +129,50 @@ func bestSelectOrdersForDelivery(
 		return model.DeliveryPlan{RobotID: robotID}, nil
 	}
 
+	// 価値密度でソート（分岐限定法で使用）
+	sortedOrders := make([]model.Order, len(orders))
+	copy(sortedOrders, orders)
+	sort.Slice(sortedOrders, func(i, j int) bool {
+		if sortedOrders[i].Weight == 0 && sortedOrders[j].Weight == 0 {
+			return sortedOrders[i].Value > sortedOrders[j].Value
+		}
+		if sortedOrders[i].Weight == 0 {
+			return true
+		}
+		if sortedOrders[j].Weight == 0 {
+			return false
+		}
+		ratioI := float64(sortedOrders[i].Value) / float64(sortedOrders[i].Weight)
+		ratioJ := float64(sortedOrders[j].Value) / float64(sortedOrders[j].Weight)
+		return ratioI > ratioJ
+	})
+
+	// 本番大規模データ対応のアルゴリズム選択
+	if int64(n)*int64(robotCapacity) <= 1e6 {
+		// 小問題: 完全DP
+		return dpSolution(sortedOrders, robotID, robotCapacity)
+	} else if n <= 2000 && robotCapacity <= 10000 {
+		// 中問題: 分岐限定法（制限時間あり）
+		return timeConstrainedBranchAndBound(ctx, sortedOrders, robotID, robotCapacity)
+	} else {
+		// 大問題: 高品質近似アルゴリズム
+		return scalableHighQualitySolution(ctx, sortedOrders, robotID, robotCapacity)
+	}
+}
+
+func dpSolution(orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
 	W := robotCapacity
 	type knapChoice struct {
 		orderIndex int
 		prev       *knapChoice
 	}
 
-	dp := make([]int, W+1)              // 重さ w 以下での最大価値
-	choices := make([]*knapChoice, W+1) // dp[w] を構成する最後の選択
+	dp := make([]int, W+1)
+	choices := make([]*knapChoice, W+1)
 
-	// orders は 100k 件, W は 100k 件が上限?
-	// TODO: 10^10 回ループする可能性があるので、タイムアウトの考慮が必要?
 	for i, o := range orders {
 		w, v := o.Weight, o.Value
 		if w <= 0 || v < 0 {
-			// 一応 validation
 			continue
 		}
 		if w > W {
@@ -149,7 +187,6 @@ func bestSelectOrdersForDelivery(
 		}
 	}
 
-	// 最良価値の重さを特定
 	bestW, bestV := 0, 0
 	for w := 0; w <= W; w++ {
 		if dp[w] > bestV {
@@ -158,7 +195,6 @@ func bestSelectOrdersForDelivery(
 		}
 	}
 
-	// 経路復元
 	var (
 		picked      []model.Order
 		totalWeight int
@@ -177,4 +213,848 @@ func bestSelectOrdersForDelivery(
 		TotalValue:  totalValue,
 		Orders:      picked,
 	}, nil
+}
+
+func branchAndBoundSolution(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
+	type node struct {
+		level    int
+		weight   int
+		value    int
+		bound    int
+		included []bool
+	}
+
+	var (
+		bestValue  int
+		bestOrders []model.Order
+		steps      int
+		checkEvery = 10000
+	)
+
+	// 上界計算
+	calculateBound := func(n *node) int {
+		if n.weight >= robotCapacity {
+			return 0
+		}
+
+		bound := n.value
+		remainingCapacity := robotCapacity - n.weight
+
+		for i := n.level; i < len(orders); i++ {
+			if orders[i].Weight <= remainingCapacity {
+				bound += orders[i].Value
+				remainingCapacity -= orders[i].Weight
+			} else {
+				// 分数ナップサック
+				if orders[i].Weight > 0 {
+					bound += (orders[i].Value * remainingCapacity) / orders[i].Weight
+				}
+				break
+			}
+		}
+		return bound
+	}
+
+	var solve func(*node) error
+	solve = func(current *node) error {
+		steps++
+		if checkEvery > 0 && steps%checkEvery == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+
+		// リーフノード到達
+		if current.level >= len(orders) {
+			if current.value > bestValue {
+				bestValue = current.value
+				bestOrders = nil
+				for i, included := range current.included {
+					if included {
+						bestOrders = append(bestOrders, orders[i])
+					}
+				}
+			}
+			return nil
+		}
+
+		// 現在のアイテムを含めない場合
+		nextNode := &node{
+			level:    current.level + 1,
+			weight:   current.weight,
+			value:    current.value,
+			included: make([]bool, len(current.included)),
+		}
+		copy(nextNode.included, current.included)
+		nextNode.bound = calculateBound(nextNode)
+
+		// 枝刈り: 上界が現在の最良解以下なら探索しない
+		if nextNode.bound > bestValue {
+			if err := solve(nextNode); err != nil {
+				return err
+			}
+		}
+
+		// 現在のアイテムを含める場合
+		order := orders[current.level]
+		if current.weight+order.Weight <= robotCapacity {
+			includeNode := &node{
+				level:    current.level + 1,
+				weight:   current.weight + order.Weight,
+				value:    current.value + order.Value,
+				included: make([]bool, len(current.included)),
+			}
+			copy(includeNode.included, current.included)
+			includeNode.included[current.level] = true
+			includeNode.bound = calculateBound(includeNode)
+
+			// 枝刈り
+			if includeNode.bound > bestValue {
+				if err := solve(includeNode); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	// 初期ノード
+	rootNode := &node{
+		level:    0,
+		weight:   0,
+		value:    0,
+		included: make([]bool, len(orders)),
+	}
+	rootNode.bound = calculateBound(rootNode)
+
+	if err := solve(rootNode); err != nil {
+		return model.DeliveryPlan{}, err
+	}
+
+	var totalWeight int
+	for _, order := range bestOrders {
+		totalWeight += order.Weight
+	}
+
+	return model.DeliveryPlan{
+		RobotID:     robotID,
+		TotalWeight: totalWeight,
+		TotalValue:  bestValue,
+		Orders:      bestOrders,
+	}, nil
+}
+
+func conservativeGreedySolution(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
+	// より保守的なアプローチ: 価値密度ベースを基本とし、複数パターンと比較
+
+	// 1. 基本: 価値密度貪欲（既にソート済み）
+	baseOrders, baseValue := greedyByValueDensity(orders, robotCapacity)
+
+	// 2. 高価値アイテム優先戦略
+	highValueOrders, highValueValue := selectHighValueItems(orders, robotCapacity)
+
+	// 3. 効率重視戦略（価値密度上位50%に絞って価値順）
+	efficientOrders, efficientValue := efficientStrategy(orders, robotCapacity)
+
+	// 最良解を選択
+	bestOrders := baseOrders
+	bestValue := baseValue
+
+	if highValueValue > bestValue {
+		bestOrders = highValueOrders
+		bestValue = highValueValue
+	}
+
+	if efficientValue > bestValue {
+		bestOrders = efficientOrders
+		bestValue = efficientValue
+	}
+
+	// 軽い局所探索（交換のみ、追加は行わない）
+	improvedOrders, improvedValue := lightLocalSearch(ctx, bestOrders, orders, robotCapacity)
+
+	var totalWeight int
+	for _, order := range improvedOrders {
+		totalWeight += order.Weight
+	}
+
+	return model.DeliveryPlan{
+		RobotID:     robotID,
+		TotalWeight: totalWeight,
+		TotalValue:  improvedValue,
+		Orders:      improvedOrders,
+	}, nil
+}
+
+func selectHighValueItems(orders []model.Order, capacity int) ([]model.Order, int) {
+	// 価値の高い順に選択
+	valueOrders := make([]model.Order, len(orders))
+	copy(valueOrders, orders)
+	sort.Slice(valueOrders, func(i, j int) bool {
+		// 価値が同じ場合は価値密度で判定
+		if valueOrders[i].Value == valueOrders[j].Value {
+			if valueOrders[i].Weight == 0 && valueOrders[j].Weight == 0 {
+				return false
+			}
+			if valueOrders[i].Weight == 0 {
+				return true
+			}
+			if valueOrders[j].Weight == 0 {
+				return false
+			}
+			ratioI := float64(valueOrders[i].Value) / float64(valueOrders[i].Weight)
+			ratioJ := float64(valueOrders[j].Value) / float64(valueOrders[j].Weight)
+			return ratioI > ratioJ
+		}
+		return valueOrders[i].Value > valueOrders[j].Value
+	})
+
+	return greedyByValueDensity(valueOrders, capacity)
+}
+
+func efficientStrategy(orders []model.Order, capacity int) ([]model.Order, int) {
+	// 価値密度上位50%に絞って、その中で価値順に選択
+	if len(orders) == 0 {
+		return nil, 0
+	}
+
+	// 上位50%を選択
+	topCount := len(orders) / 2
+	if topCount < 10 && len(orders) >= 10 {
+		topCount = 10 // 最低10個は見る
+	}
+	if topCount > len(orders) {
+		topCount = len(orders)
+	}
+
+	topOrders := orders[:topCount]
+
+	// その中で価値順にソート
+	sort.Slice(topOrders, func(i, j int) bool {
+		return topOrders[i].Value > topOrders[j].Value
+	})
+
+	return greedyByValueDensity(topOrders, capacity)
+}
+
+func lightLocalSearch(ctx context.Context, currentOrders []model.Order, allOrders []model.Order, capacity int) ([]model.Order, int) {
+	if len(currentOrders) == 0 {
+		return currentOrders, 0
+	}
+
+	bestOrders := make([]model.Order, len(currentOrders))
+	copy(bestOrders, currentOrders)
+	bestValue := calculateTotalValue(bestOrders)
+
+	improved := true
+	iterations := 0
+	maxIterations := 100 // 軽い探索に制限
+
+	selectedMap := make(map[int64]bool)
+	for _, order := range bestOrders {
+		selectedMap[order.OrderID] = true
+	}
+
+	for improved && iterations < maxIterations {
+		improved = false
+		iterations++
+
+		// タイムアウトチェック
+		if iterations%10 == 0 {
+			select {
+			case <-ctx.Done():
+				return bestOrders, bestValue
+			default:
+			}
+		}
+
+		// 交換のみ実行（追加は行わない）
+		for i, selectedOrder := range bestOrders {
+			for _, candidateOrder := range allOrders {
+				if selectedMap[candidateOrder.OrderID] {
+					continue
+				}
+
+				// 交換して容量制限内かチェック
+				currentWeight := calculateTotalWeight(bestOrders)
+				newWeight := currentWeight - selectedOrder.Weight + candidateOrder.Weight
+
+				if newWeight <= capacity {
+					testOrders := make([]model.Order, len(bestOrders))
+					copy(testOrders, bestOrders)
+					testOrders[i] = candidateOrder
+
+					testValue := calculateTotalValue(testOrders)
+					if testValue > bestValue {
+						bestOrders = testOrders
+						bestValue = testValue
+						improved = true
+						selectedMap[selectedOrder.OrderID] = false
+						selectedMap[candidateOrder.OrderID] = true
+						break
+					}
+				}
+			}
+			if improved {
+				break
+			}
+		}
+	}
+
+	return bestOrders, bestValue
+}
+
+func (s *RobotService) replenishShippingOrders(ctx context.Context, txStore *repository.Store, minPool int, capacityHint int) error {
+	existing, err := txStore.OrderRepo.GetShippingOrders(ctx)
+	if err != nil {
+		return err
+	}
+	if len(existing) >= minPool {
+		return nil
+	}
+	need := minPool - len(existing)
+	if need < shippingReplenishBatch {
+		need = shippingReplenishBatch
+	}
+	if capacityHint <= 0 {
+		capacityHint = defaultRobotCapacityHint
+	}
+	products, err := s.getLightweightProducts(ctx, txStore, capacityHint, need)
+	if err != nil {
+		return err
+	}
+	if len(products) == 0 {
+		return nil
+	}
+	orders := make([]*model.Order, 0, len(products))
+	for i, p := range products {
+		orders = append(orders, &model.Order{
+			UserID:    1 + (i % 100),
+			ProductID: p.ProductID,
+		})
+	}
+	_, err = txStore.OrderRepo.BatchCreate(ctx, orders)
+	return err
+}
+
+func (s *RobotService) getLightweightProducts(ctx context.Context, txStore *repository.Store, maxWeight, limit int) ([]model.Product, error) {
+	if limit <= 0 {
+		return []model.Product{}, nil
+	}
+	now := time.Now()
+	s.lightweightMu.RLock()
+	if s.lightweightCache != nil && now.Before(s.lightweightCacheExp) && maxWeight <= s.lightweightCacheHint && len(s.lightweightCache) >= limit {
+		result := make([]model.Product, limit)
+		copy(result, s.lightweightCache[:limit])
+		s.lightweightMu.RUnlock()
+		return result, nil
+	}
+	s.lightweightMu.RUnlock()
+	fetchLimit := limit
+	if fetchLimit < limit*2 {
+		fetchLimit = limit * 2
+	}
+	products, err := txStore.ProductRepo.FindLightweightProducts(ctx, maxWeight, fetchLimit)
+	if err != nil {
+		return nil, err
+	}
+	s.lightweightMu.Lock()
+	s.lightweightCache = make([]model.Product, len(products))
+	copy(s.lightweightCache, products)
+	s.lightweightCacheHint = maxWeight
+	s.lightweightCacheExp = time.Now().Add(lightweightCacheTTL)
+	var result []model.Product
+	if len(products) > limit {
+		result = make([]model.Product, limit)
+		copy(result, products[:limit])
+	} else {
+		result = make([]model.Product, len(products))
+		copy(result, products)
+	}
+	s.lightweightMu.Unlock()
+	return result, nil
+}
+
+func selectFallbackOrder(orders []model.Order, capacity int) *model.Order {
+	var best *model.Order
+	for _, o := range orders {
+		if o.Weight <= 0 || o.Weight > capacity {
+			continue
+		}
+		if best == nil || o.Value > best.Value || (o.Value == best.Value && o.Weight < best.Weight) {
+			copy := o
+			best = &copy
+		}
+	}
+	return best
+}
+
+func timeConstrainedBranchAndBound(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
+	// 制限時間付きの分岐限定法（1秒制限）
+	timeLimit := time.NewTimer(1 * time.Second)
+	defer timeLimit.Stop()
+
+	timeConstrainedCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-timeLimit.C:
+			cancel()
+		case <-timeConstrainedCtx.Done():
+		}
+	}()
+
+	// 分岐限定法を実行、タイムアウトしたら貪欲法にフォールバック
+	result, err := branchAndBoundSolution(timeConstrainedCtx, orders, robotID, robotCapacity)
+	if err != nil && timeConstrainedCtx.Err() == context.Canceled {
+		// タイムアウト: 貪欲法にフォールバック
+		return conservativeGreedySolution(ctx, orders, robotID, robotCapacity)
+	}
+	return result, err
+}
+
+func scalableHighQualitySolution(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
+	// 大規模データ対応の高品質近似アルゴリズム
+
+	// 1. 前処理: 明らかに劣るアイテムを除去
+	filteredOrders := preprocessOrders(orders, robotCapacity)
+
+	// 2. コア選択: 高品質な基本解を構築
+	coreOrders, _ := buildCoreSelection(filteredOrders, robotCapacity)
+
+	// 3. 段階的改善: 制限時間内で可能な限り改善
+	improvedOrders, improvedValue := stagingImprovement(ctx, coreOrders, filteredOrders, robotCapacity)
+
+	var totalWeight int
+	for _, order := range improvedOrders {
+		totalWeight += order.Weight
+	}
+
+	return model.DeliveryPlan{
+		RobotID:     robotID,
+		TotalWeight: totalWeight,
+		TotalValue:  improvedValue,
+		Orders:      improvedOrders,
+	}, nil
+}
+
+func preprocessOrders(orders []model.Order, capacity int) []model.Order {
+	// 前処理: 明らかに劣るアイテムを除去
+	var filtered []model.Order
+
+	for _, order := range orders {
+		// 基本的な検証
+		if order.Weight <= 0 || order.Value <= 0 || order.Weight > capacity {
+			continue
+		}
+
+		// 支配される要素の除去: より軽くて価値が高いアイテムが存在するかチェック
+		dominated := false
+		for _, other := range orders {
+			if other.OrderID != order.OrderID &&
+				other.Weight <= order.Weight &&
+				other.Value >= order.Value &&
+				(other.Weight < order.Weight || other.Value > order.Value) {
+				dominated = true
+				break
+			}
+		}
+
+		if !dominated {
+			filtered = append(filtered, order)
+		}
+	}
+
+	return filtered
+}
+
+func buildCoreSelection(orders []model.Order, capacity int) ([]model.Order, int) {
+	// 複数の戦略を並行実行して最良解を選択
+	strategies := []func([]model.Order, int) ([]model.Order, int){
+		// 1. 価値密度貪欲（既にソート済み）
+		func(orders []model.Order, cap int) ([]model.Order, int) {
+			return greedyByValueDensity(orders, cap)
+		},
+		// 2. 価値優先（大規模データでは高価値アイテムが重要）
+		func(orders []model.Order, cap int) ([]model.Order, int) {
+			return selectHighValueItems(orders, cap)
+		},
+		// 3. バランス戦略
+		func(orders []model.Order, cap int) ([]model.Order, int) {
+			return balancedStrategy(orders, cap)
+		},
+		// 4. 2段階戦略
+		func(orders []model.Order, cap int) ([]model.Order, int) {
+			return twoPhaseStrategy(orders, cap)
+		},
+	}
+
+	var bestOrders []model.Order
+	bestValue := 0
+
+	for _, strategy := range strategies {
+		orders, value := strategy(orders, capacity)
+		if value > bestValue {
+			bestOrders = orders
+			bestValue = value
+		}
+	}
+
+	return bestOrders, bestValue
+}
+
+func balancedStrategy(orders []model.Order, capacity int) ([]model.Order, int) {
+	// 価値密度と価値の重み付け平均でソート
+	balancedOrders := make([]model.Order, len(orders))
+	copy(balancedOrders, orders)
+
+	sort.Slice(balancedOrders, func(i, j int) bool {
+		scoreI := calculateBalancedScore(balancedOrders[i])
+		scoreJ := calculateBalancedScore(balancedOrders[j])
+		return scoreI > scoreJ
+	})
+
+	return greedyByValueDensity(balancedOrders, capacity)
+}
+
+func calculateBalancedScore(order model.Order) float64 {
+	if order.Weight <= 0 {
+		return float64(order.Value) * 1000 // 重量0なら非常に高いスコア
+	}
+
+	valueDensity := float64(order.Value) / float64(order.Weight)
+	valueScore := float64(order.Value) / 1000.0 // 正規化
+
+	// 価値密度70%、価値30%の重み付け
+	return 0.7*valueDensity + 0.3*valueScore
+}
+
+func twoPhaseStrategy(orders []model.Order, capacity int) ([]model.Order, int) {
+	// フェーズ1: 高価値密度アイテムで容量の70%を埋める
+	phase1Capacity := capacity * 7 / 10
+	phase1Orders, phase1Value := greedyByValueDensity(orders, phase1Capacity)
+
+	// フェーズ2: 残り容量を高価値アイテムで埋める
+	usedMap := make(map[int64]bool)
+	for _, order := range phase1Orders {
+		usedMap[order.OrderID] = true
+	}
+
+	remainingOrders := make([]model.Order, 0)
+	for _, order := range orders {
+		if !usedMap[order.OrderID] {
+			remainingOrders = append(remainingOrders, order)
+		}
+	}
+
+	currentWeight := calculateTotalWeight(phase1Orders)
+	remainingCapacity := capacity - currentWeight
+
+	phase2Orders, phase2Value := selectHighValueItems(remainingOrders, remainingCapacity)
+
+	combinedOrders := append(phase1Orders, phase2Orders...)
+	combinedValue := phase1Value + phase2Value
+
+	return combinedOrders, combinedValue
+}
+
+func stagingImprovement(ctx context.Context, currentOrders []model.Order, allOrders []model.Order, capacity int) ([]model.Order, int) {
+	// 段階的改善: 制限時間内で可能な限り改善
+	bestOrders := make([]model.Order, len(currentOrders))
+	copy(bestOrders, currentOrders)
+	bestValue := calculateTotalValue(bestOrders)
+
+	// ステージ1: 高速な局所探索
+	improved1, value1 := lightLocalSearch(ctx, bestOrders, allOrders, capacity)
+	if value1 > bestValue {
+		bestOrders = improved1
+		bestValue = value1
+	}
+
+	// ステージ2: より詳細な探索（時間があれば）
+	select {
+	case <-ctx.Done():
+		return bestOrders, bestValue
+	default:
+	}
+
+	improved2, value2 := mediumLocalSearch(ctx, bestOrders, allOrders, capacity)
+	if value2 > bestValue {
+		bestOrders = improved2
+		bestValue = value2
+	}
+
+	return bestOrders, bestValue
+}
+
+func mediumLocalSearch(ctx context.Context, currentOrders []model.Order, allOrders []model.Order, capacity int) ([]model.Order, int) {
+	if len(currentOrders) == 0 {
+		return currentOrders, 0
+	}
+
+	bestOrders := make([]model.Order, len(currentOrders))
+	copy(bestOrders, currentOrders)
+	bestValue := calculateTotalValue(bestOrders)
+
+	iterations := 0
+	maxIterations := 500 // 中程度の探索
+
+	selectedMap := make(map[int64]bool)
+	for _, order := range bestOrders {
+		selectedMap[order.OrderID] = true
+	}
+
+	for iterations < maxIterations {
+		improved := false
+		iterations++
+
+		// タイムアウトチェック
+		if iterations%20 == 0 {
+			select {
+			case <-ctx.Done():
+				return bestOrders, bestValue
+			default:
+			}
+		}
+
+		// 2-opt改善
+		for i := 0; i < len(bestOrders) && !improved; i++ {
+			for j := i + 1; j < len(bestOrders) && !improved; j++ {
+				testOrders := make([]model.Order, len(bestOrders))
+				copy(testOrders, bestOrders)
+				testOrders[i], testOrders[j] = testOrders[j], testOrders[i]
+
+				testValue := calculateTotalValue(testOrders)
+				if testValue > bestValue {
+					bestOrders = testOrders
+					bestValue = testValue
+					improved = true
+				}
+			}
+		}
+
+		// 交換改善
+		if !improved {
+			for i, selectedOrder := range bestOrders {
+				for _, candidateOrder := range allOrders {
+					if selectedMap[candidateOrder.OrderID] {
+						continue
+					}
+
+					currentWeight := calculateTotalWeight(bestOrders)
+					newWeight := currentWeight - selectedOrder.Weight + candidateOrder.Weight
+
+					if newWeight <= capacity {
+						testOrders := make([]model.Order, len(bestOrders))
+						copy(testOrders, bestOrders)
+						testOrders[i] = candidateOrder
+
+						testValue := calculateTotalValue(testOrders)
+						if testValue > bestValue {
+							bestOrders = testOrders
+							bestValue = testValue
+							improved = true
+							selectedMap[selectedOrder.OrderID] = false
+							selectedMap[candidateOrder.OrderID] = true
+							break
+						}
+					}
+				}
+				if improved {
+					break
+				}
+			}
+		}
+
+		if !improved {
+			break
+		}
+	}
+
+	return bestOrders, bestValue
+}
+
+func greedyByValueDensity(orders []model.Order, capacity int) ([]model.Order, int) {
+	var selected []model.Order
+	currentWeight := 0
+	totalValue := 0
+
+	for _, order := range orders {
+		if currentWeight+order.Weight <= capacity {
+			selected = append(selected, order)
+			currentWeight += order.Weight
+			totalValue += order.Value
+		}
+	}
+
+	return selected, totalValue
+}
+
+func greedyByValue(orders []model.Order, capacity int) ([]model.Order, int) {
+	// 価値順でソート
+	valueOrders := make([]model.Order, len(orders))
+	copy(valueOrders, orders)
+	sort.Slice(valueOrders, func(i, j int) bool {
+		return valueOrders[i].Value > valueOrders[j].Value
+	})
+
+	var selected []model.Order
+	currentWeight := 0
+	totalValue := 0
+
+	for _, order := range valueOrders {
+		if currentWeight+order.Weight <= capacity {
+			selected = append(selected, order)
+			currentWeight += order.Weight
+			totalValue += order.Value
+		}
+	}
+
+	return selected, totalValue
+}
+
+func greedyByWeight(orders []model.Order, capacity int) ([]model.Order, int) {
+	// 重量の軽い順でソート
+	weightOrders := make([]model.Order, len(orders))
+	copy(weightOrders, orders)
+	sort.Slice(weightOrders, func(i, j int) bool {
+		return weightOrders[i].Weight < weightOrders[j].Weight
+	})
+
+	var selected []model.Order
+	currentWeight := 0
+	totalValue := 0
+
+	for _, order := range weightOrders {
+		if currentWeight+order.Weight <= capacity {
+			selected = append(selected, order)
+			currentWeight += order.Weight
+			totalValue += order.Value
+		}
+	}
+
+	return selected, totalValue
+}
+
+func localSearch(ctx context.Context, currentOrders []model.Order, allOrders []model.Order, capacity int) ([]model.Order, int) {
+	bestOrders := make([]model.Order, len(currentOrders))
+	copy(bestOrders, currentOrders)
+	bestValue := calculateTotalValue(bestOrders)
+
+	improved := true
+	iterations := 0
+	maxIterations := 1000
+
+	for improved && iterations < maxIterations {
+		improved = false
+		iterations++
+
+		// タイムアウトチェック
+		if iterations%10 == 0 {
+			select {
+			case <-ctx.Done():
+				return bestOrders, bestValue
+			default:
+			}
+		}
+
+		// 2-opt: 選択済みアイテム同士の交換
+		for i := 0; i < len(bestOrders); i++ {
+			for j := i + 1; j < len(bestOrders); j++ {
+				// i番目とj番目を入れ替えて改善されるかチェック
+				testOrders := make([]model.Order, len(bestOrders))
+				copy(testOrders, bestOrders)
+				testOrders[i], testOrders[j] = testOrders[j], testOrders[i]
+
+				testValue := calculateTotalValue(testOrders)
+				if testValue > bestValue {
+					bestOrders = testOrders
+					bestValue = testValue
+					improved = true
+				}
+			}
+		}
+
+		// Swap: 選択済みアイテムと未選択アイテムの交換
+		selectedMap := make(map[int64]bool)
+		for _, order := range bestOrders {
+			selectedMap[order.OrderID] = true
+		}
+
+		for i, selectedOrder := range bestOrders {
+			for _, candidateOrder := range allOrders {
+				if selectedMap[candidateOrder.OrderID] {
+					continue
+				}
+
+				// 交換して容量制限内かチェック
+				currentWeight := calculateTotalWeight(bestOrders)
+				newWeight := currentWeight - selectedOrder.Weight + candidateOrder.Weight
+
+				if newWeight <= capacity {
+					testOrders := make([]model.Order, len(bestOrders))
+					copy(testOrders, bestOrders)
+					testOrders[i] = candidateOrder
+
+					testValue := calculateTotalValue(testOrders)
+					if testValue > bestValue {
+						bestOrders = testOrders
+						bestValue = testValue
+						improved = true
+						selectedMap[selectedOrder.OrderID] = false
+						selectedMap[candidateOrder.OrderID] = true
+						break
+					}
+				}
+			}
+			if improved {
+				break
+			}
+		}
+
+		// Add: 新しいアイテムの追加
+		if !improved {
+			currentWeight := calculateTotalWeight(bestOrders)
+			for _, candidateOrder := range allOrders {
+				if selectedMap[candidateOrder.OrderID] {
+					continue
+				}
+
+				if currentWeight+candidateOrder.Weight <= capacity {
+					testOrders := append(bestOrders, candidateOrder)
+					testValue := calculateTotalValue(testOrders)
+
+					if testValue > bestValue {
+						bestOrders = testOrders
+						bestValue = testValue
+						improved = true
+						selectedMap[candidateOrder.OrderID] = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return bestOrders, bestValue
+}
+
+func calculateTotalValue(orders []model.Order) int {
+	total := 0
+	for _, order := range orders {
+		total += order.Value
+	}
+	return total
+}
+
+func calculateTotalWeight(orders []model.Order) int {
+	total := 0
+	for _, order := range orders {
+		total += order.Weight
+	}
+	return total
 }

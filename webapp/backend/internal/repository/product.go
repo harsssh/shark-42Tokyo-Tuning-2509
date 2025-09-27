@@ -23,6 +23,24 @@ func NewProductRepository(db DBTX) *ProductRepository {
 	return &ProductRepository{db: db, cache: cache}
 }
 
+func (r *ProductRepository) FindLightweightProducts(ctx context.Context, maxWeight int, limit int) ([]model.Product, error) {
+	if limit <= 0 {
+		return []model.Product{}, nil
+	}
+	query := `
+		SELECT product_id, name, value, weight, image, description
+		FROM products
+		WHERE weight > 0 AND weight <= ?
+		ORDER BY weight ASC, value DESC, product_id ASC
+		LIMIT ?
+	`
+	var products []model.Product
+	if err := r.db.SelectContext(ctx, &products, query, maxWeight, limit); err != nil {
+		return nil, err
+	}
+	return products, nil
+}
+
 // 商品一覧を全件取得し、アプリケーション側でページング処理を行う
 // type の考慮どこいった??
 func (r *ProductRepository) ListProducts(
