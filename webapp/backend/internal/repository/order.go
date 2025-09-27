@@ -5,33 +5,32 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
 
+const (
+	shippingOrderCacheSize = 1024
+	shippingOrderCacheKey  = "shipping_orders_v1"
+)
+
 type OrderRepository struct {
 	db DBTX
+	// 頻繁に purge されるので、効果があるか分からない
+	cache *lru.Cache[string, []model.Order]
 }
 
 func NewOrderRepository(db DBTX) *OrderRepository {
-	return &OrderRepository{db: db}
+	cache, err := lru.New[string, []model.Order](shippingOrderCacheSize)
+	if err != nil {
+		panic(err)
+	}
+	return &OrderRepository{db: db, cache: cache}
 }
 
-// 注文を作成し、生成された注文IDを返す
-func (r *OrderRepository) Create(ctx context.Context, order *model.Order) (string, error) {
-	query := `INSERT INTO orders (user_id, product_id, shipped_status, created_at) VALUES (?, ?, 'shipping', NOW())`
-	result, err := r.db.ExecContext(ctx, query, order.UserID, order.ProductID)
-	if err != nil {
-		return "", err
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d", id), nil
-}
-
+// ダメだったら Create を復旧する
 func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order) ([]string, error) {
 	if len(orders) == 0 {
 		return []string{}, nil
@@ -49,6 +48,8 @@ func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order
 	if err != nil {
 		return nil, err
 	}
+
+	r.cache.Purge()
 
 	// NOTE: 結構怖い
 	var insertedIDs []string
@@ -79,11 +80,21 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 	}
 	query = r.db.Rebind(query)
 	_, err = r.db.ExecContext(ctx, query, args...)
+
+	// キャッシュを削除
+	if err == nil {
+		r.cache.Purge()
+	}
+
 	return err
 }
 
 // 配送中(shipped_status:shipping)の注文一覧を取得
 func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order, error) {
+	if v, ok := r.cache.Get(shippingOrderCacheKey); ok {
+		return v, nil
+	}
+
 	var orders []model.Order
 	query := `
         SELECT
@@ -95,6 +106,12 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
         WHERE o.shipped_status = 'shipping'
     `
 	err := r.db.SelectContext(ctx, &orders, query)
+
+	// 成功してたらキャッシュ
+	if err == nil {
+		r.cache.Add(shippingOrderCacheKey, orders)
+	}
+
 	return orders, err
 }
 
