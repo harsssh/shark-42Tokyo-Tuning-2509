@@ -1,7 +1,4 @@
 services:
-  # ----------------------------------------------------
-  # Backend サービス: Go 言語の AP サーバー
-  # ----------------------------------------------------
   backend:
     container_name: tuning-backend
     build:
@@ -12,8 +9,6 @@ services:
       TZ: Asia/Tokyo
       DATABASE_URL: user:password@unix(/var/run/mysqld/mysqld.sock)/42tokyo2508-db
       APP_SOCKET_PATH: /var/run/app/app.sock
-    ports:
-      - "8080:8080"
     working_dir: /usr/src/backend
     volumes:
       - ./images:/app/images:ro
@@ -41,9 +36,6 @@ services:
       retries: 10
       start_period: 30s
 
-  # ----------------------------------------------------
-  # Frontend サービス: クライアントサイドの Web アプリケーション
-  # ----------------------------------------------------
   frontend:
     container_name: tuning-frontend
     build:
@@ -53,8 +45,6 @@ services:
     environment:
       - API_BASE_URL=https://${HOSTNAME}.ftt2508.dabaas.net
       - TZ=Asia/Tokyo
-    ports:
-      - "3000:3000"
     networks:
       - webapp-network
     depends_on:
@@ -68,9 +58,6 @@ services:
       start_period: 20s
     entrypoint: ["sh", "-c", "yarn start --hostname 0.0.0.0 --port 3000"]
 
-  # ----------------------------------------------------
-  # DB サービス: MySQL データベース (Makefile の設定を移行)
-  # ----------------------------------------------------
   db:
     container_name: tuning-mysql
     image: 42tokyo2508.azurecr.io/mysql:base
@@ -109,9 +96,7 @@ services:
       timeout: 30s
       retries: 10
       start_period: 1000s
-  # ----------------------------------------------------
-  # Nginx サービス: リバースプロキシと静的ファイル配信
-  # ----------------------------------------------------
+
   nginx:
     container_name: tuning-nginx
     image: nginx:stable
@@ -150,9 +135,6 @@ services:
     environment:
       PPROTEIN_HTTPLOG: "/var/log/nginx/_access.log"
 
-# ----------------------------------------------------
-# ネットワーク定義: コンテナ間の通信
-# ----------------------------------------------------
 networks:
   webapp-network:
     name: webapp-network
