@@ -6,7 +6,9 @@ import (
 	"backend/internal/middleware"
 	"backend/internal/repository"
 	"backend/internal/service"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 
@@ -90,13 +92,26 @@ func (s *Server) setupRoutes(
 }
 
 func (s *Server) Run() {
-	appPort := os.Getenv("PORT")
-	if appPort == "" {
-		appPort = "8080"
+	socketPath := os.Getenv("APP_SOCKET_PATH")
+	if socketPath == "" {
+		socketPath = "/var/run/app/app.sock"
+	}
+	_ = os.Remove(socketPath)
+
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		log.Fatalf("listen unix: %v", err)
+	}
+	if err := os.Chmod(socketPath, 0666); err != nil {
+		log.Printf("chmod socket: %v", err)
 	}
 
-	log.Printf("Starting server on :%s", appPort)
-	if err := http.ListenAndServe(":"+appPort, s.Router); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	srv := &http.Server{
+		Handler: s.Router,
+	}
+
+	log.Printf("Starting server on unix socket %s", socketPath)
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("server error: %v", err)
 	}
 }
