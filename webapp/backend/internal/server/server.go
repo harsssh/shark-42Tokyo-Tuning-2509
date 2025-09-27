@@ -6,15 +6,12 @@ import (
 	"backend/internal/middleware"
 	"backend/internal/repository"
 	"backend/internal/service"
-	"backend/internal/telemetry"
-	"context"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
-	"github.com/riandyrn/otelchi"
 )
 
 type Server struct {
@@ -49,13 +46,6 @@ func NewServer() (*Server, *sqlx.DB, error) {
 	robotAuthMW := middleware.RobotAuthMiddleware(robotAPIKey)
 
 	r := chi.NewRouter()
-	r.Use(otelchi.Middleware(
-		"backend-api",
-		otelchi.WithChiRoutes(r),
-		otelchi.WithFilter(func(req *http.Request) bool {
-			return req.URL.Path != "/api/health"
-		}),
-	))
 
 	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -97,17 +87,6 @@ func (s *Server) setupRoutes(
 }
 
 func (s *Server) Run() {
-	ctx := context.Background()
-	shutdown, err := telemetry.Init(ctx)
-	if err != nil {
-		log.Fatalf("Failed to initialize telemetry: %v", err)
-	}
-	defer func() {
-		if err := shutdown(context.Background()); err != nil {
-			log.Printf("Failed to shutdown telemetry: %v", err)
-		}
-	}()
-
 	appPort := os.Getenv("PORT")
 	if appPort == "" {
 		appPort = "8080"
