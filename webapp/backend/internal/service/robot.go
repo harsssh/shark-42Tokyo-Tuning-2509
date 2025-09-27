@@ -121,14 +121,13 @@ func bestSelectOrdersForDelivery(
 	}
 
 	W := robotCapacity
-	dp := make([]int, W+1)     // 重さ w 以下での最大価値
-	choose := make([]int, W+1) // dp[w] を更新した「直近のアイテム index」、未設定は -1
-	prevW := make([]int, W+1)  // そのときの遷移元の重さ（w - weight[i]）
-
-	for i := range choose {
-		choose[i] = -1
-		prevW[i] = -1
+	type knapChoice struct {
+		orderIndex int
+		prev       *knapChoice
 	}
+
+	dp := make([]int, W+1)              // 重さ w 以下での最大価値
+	choices := make([]*knapChoice, W+1) // dp[w] を構成する最後の選択
 
 	// orders は 100k 件, W は 100k 件が上限?
 	// TODO: 10^10 回ループする可能性があるので、タイムアウトの考慮が必要?
@@ -145,8 +144,7 @@ func bestSelectOrdersForDelivery(
 			alt := dp[cw-w] + v
 			if alt > dp[cw] {
 				dp[cw] = alt
-				choose[cw] = i
-				prevW[cw] = cw - w
+				choices[cw] = &knapChoice{orderIndex: i, prev: choices[cw-w]}
 			}
 		}
 	}
@@ -161,17 +159,22 @@ func bestSelectOrdersForDelivery(
 	}
 
 	// 経路復元
-	var picked []model.Order
-	for cur := bestW; cur > 0 && choose[cur] != -1; {
-		idx := choose[cur]
-		picked = append(picked, orders[idx])
-		cur = prevW[cur]
+	var (
+		picked      []model.Order
+		totalWeight int
+		totalValue  int
+	)
+	for node := choices[bestW]; node != nil; node = node.prev {
+		order := orders[node.orderIndex]
+		picked = append(picked, order)
+		totalWeight += order.Weight
+		totalValue += order.Value
 	}
 
 	return model.DeliveryPlan{
 		RobotID:     robotID,
-		TotalWeight: bestW,
-		TotalValue:  bestV,
+		TotalWeight: totalWeight,
+		TotalValue:  totalValue,
 		Orders:      picked,
 	}, nil
 }
