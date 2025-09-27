@@ -11,30 +11,40 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-type OrderRepository struct {
-	db                    DBTX
+type orderRepoState struct {
 	shippingOrdersVersion int64
 	mu                    sync.RWMutex
 }
 
-func NewOrderRepository(db DBTX) *OrderRepository {
+type OrderRepository struct {
+	db    DBTX
+	state *orderRepoState
+}
+
+func newOrderRepository(db DBTX, state *orderRepoState) *OrderRepository {
+	if state == nil {
+		state = &orderRepoState{}
+	}
 	return &OrderRepository{
-		db:                    db,
-		shippingOrdersVersion: 0,
-		mu:                    sync.RWMutex{},
+		db:    db,
+		state: state,
 	}
 }
 
+func NewOrderRepository(db DBTX) *OrderRepository {
+	return newOrderRepository(db, &orderRepoState{})
+}
+
 func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.shippingOrdersVersion, nil
+	r.state.mu.RLock()
+	defer r.state.mu.RUnlock()
+	return r.state.shippingOrdersVersion, nil
 }
 
 func (r *OrderRepository) incrementShippingOrdersVersion() {
-	r.mu.Lock()
-	r.shippingOrdersVersion++
-	r.mu.Unlock()
+	r.state.mu.Lock()
+	r.state.shippingOrdersVersion++
+	r.state.mu.Unlock()
 }
 
 // ダメだったら Create を復旧する

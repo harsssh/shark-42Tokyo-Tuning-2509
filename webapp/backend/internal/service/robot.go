@@ -67,8 +67,7 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 		return nil, err
 	}
 
-	// 再取得 (version が変わってるはず)
-	cacheKey.ordersVersion = lo.Must(s.store.OrderRepo.GetShippingOrdersVersion(ctx))
+	// 元のバージョンをキーにキャッシュすることで、配送ステータス更新後の再計算を促す
 	s.planCache.Add(cacheKey, plan)
 
 	return &plan, nil
