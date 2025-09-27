@@ -107,7 +107,7 @@ services:
   # ----------------------------------------------------
   nginx:
     container_name: tuning-nginx
-    image: nginx:stable-otel
+    image: nginx:stable
     environment:
       TZ: Asia/Tokyo
     ports:
