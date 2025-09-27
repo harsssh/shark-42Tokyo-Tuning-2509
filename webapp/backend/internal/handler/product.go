@@ -58,7 +58,6 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	products, total, err := h.ProductSvc.FetchProducts(r.Context(), userID, req)
 	if err != nil {
-		log.Printf("Failed to fetch products for user %d: %v", userID, err)
 		http.Error(w, "Failed to fetch products", http.StatusInternalServerError)
 		return
 	}
