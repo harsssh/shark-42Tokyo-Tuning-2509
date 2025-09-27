@@ -11,13 +11,15 @@ services:
       TRACE_ENABLED: "true"
       JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
       TRACE_SAMPLE_RATIO: "1.0"
-      DATABASE_URL: user:password@tcp(db:3306)/42tokyo2508-db
-      PORT: 8080
+      DATABASE_URL: user:password@unix(/var/run/mysqld/mysqld.sock)/42tokyo2508-db
+      APP_SOCKET_PATH: /var/run/app/app.sock
     working_dir: /usr/src/backend
     volumes:
       # 画像ファイル用のボリュームを追加
       - ./images:/app/images:ro
       - ./backend:/usr/src/backend
+      - mysql_socket:/var/run/mysqld
+      - app_socket:/var/run/app
     # ports:
     networks:
       - webapp-network
@@ -25,7 +27,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:${PORT:-8080}/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null --unix-socket /var/run/app/app.sock http://localhost/api/health || exit 1"]
       interval: 5s
       timeout: 10s
       retries: 10
@@ -80,6 +82,7 @@ services:
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/local_data:/var/lib/mysql
       - ./mysql/init/restoreSQL:/docker-entrypoint-initdb.d/init/restoreSQL
+      - mysql_socket:/var/run/mysqld
     networks:
       - webapp-network
     healthcheck:
@@ -109,6 +112,7 @@ services:
     volumes:
       - ./nginx/nginx.local.conf:/etc/nginx/nginx.conf
       - ./images:/app/images:ro
+      - app_socket:/var/run/app
     networks:
       - webapp-network
     depends_on:
@@ -140,3 +144,7 @@ networks:
   webapp-network:
     name: webapp-network
     external: true
+
+volumes:
+  mysql_socket:
+  app_socket:

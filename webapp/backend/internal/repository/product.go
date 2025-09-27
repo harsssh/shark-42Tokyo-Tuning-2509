@@ -5,10 +5,11 @@ import (
 	"context"
 	"fmt"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"log"
 	"strings"
 )
 
-var ProductListCountCacheSize = 1024
+var ProductListCountCacheSize = 64
 
 type ProductRepository struct {
 	db    DBTX
@@ -34,8 +35,9 @@ func (r *ProductRepository) ListProducts(
 	args := make([]interface{}, 0, 1)
 
 	if s := strings.TrimSpace(req.Search); s != "" {
-		where = "WHERE MATCH(name, description) AGAINST (? IN BOOLEAN MODE)"
-		args = append(args, "*"+s+"*")
+		where = "WHERE name LIKE ? OR description LIKE ?"
+		pattern := "%" + s + "%"
+		args = append(args, pattern, pattern)
 	}
 
 	// 総件数
@@ -50,6 +52,7 @@ func (r *ProductRepository) ListProducts(
 			return nil, 0, err
 		}
 		r.cache.Add(totalCacheKey, total)
+		log.Printf("ListProducts: cache len=%d\n", r.cache.Len())
 	}
 
 	// データ取得（ORDER BY の列名・並び順をそのまま埋め込む）

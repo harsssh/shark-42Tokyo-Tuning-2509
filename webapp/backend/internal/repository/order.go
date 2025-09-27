@@ -118,40 +118,67 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 	conds := []string{"o.user_id = ?"}
 	args := []any{userID}
 
+	var (
+		searchApplied bool
+		searchPattern string
+	)
+
 	if s := strings.TrimSpace(req.Search); s != "" {
+		searchApplied = true
 		if strings.ToLower(req.Type) == "prefix" {
 			// 前方一致
-			conds = append(conds, "p.name like ?")
-			args = append(args, s+"%")
+			searchPattern = s + "%"
 		} else {
 			// 部分一致
-			conds = append(conds, "MATCH(p.name) AGAINST (? IN BOOLEAN MODE)")
-			args = append(args, "*"+s+"*")
+			searchPattern = "%" + s + "%"
 		}
+		conds = append(conds, "p.name LIKE ?")
+		args = append(args, searchPattern)
+	}
+
+	// 件数の取得。検索条件がなければ orders のみでカウントして余計な JOIN を避ける
+	countQuery := "SELECT COUNT(*) FROM orders o WHERE o.user_id = ?"
+	countArgs := []any{userID}
+	if searchApplied {
+		countQuery = fmt.Sprintf(`
+            SELECT COUNT(*)
+            FROM orders o
+            JOIN products p ON p.product_id = o.product_id
+            WHERE %s`,
+			strings.Join(conds, " AND "),
+		)
+		countArgs = append(countArgs, searchPattern)
+	}
+
+	total := 0
+	if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []model.Order{}, 0, nil
 	}
 
 	orderBy := buildOrderBy(req.SortField, req.SortOrder)
 
 	query := fmt.Sprintf(`
-		SELECT
-			o.order_id,
-			o.product_id,
-			p.name          AS product_name,
-			o.shipped_status,
-			o.created_at,
-			o.arrived_at,
-			COUNT(*) OVER() AS total_count
-		FROM orders o
-		JOIN products p ON p.product_id = o.product_id
-		WHERE %s
-		%s
-		LIMIT ? OFFSET ?`,
+        SELECT
+            o.order_id,
+            o.product_id,
+            p.name          AS product_name,
+            o.shipped_status,
+            o.created_at,
+            o.arrived_at
+        FROM orders o
+        JOIN products p ON p.product_id = o.product_id
+        WHERE %s
+        %s
+        LIMIT ? OFFSET ?`,
 		strings.Join(conds, " AND "),
 		orderBy,
 	)
 
 	// ページング引数
-	argsWithPage := append(append([]interface{}{}, args...), req.PageSize, req.Offset)
+	argsWithPage := append(append([]any{}, args...), req.PageSize, req.Offset)
 
 	type row struct {
 		OrderID       int64        `db:"order_id"`
@@ -160,30 +187,11 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 		ShippedStatus string       `db:"shipped_status"`
 		CreatedAt     sql.NullTime `db:"created_at"`
 		ArrivedAt     sql.NullTime `db:"arrived_at"`
-		Total         int          `db:"total_count"`
 	}
 
 	var rows []row
 	if err := r.db.SelectContext(ctx, &rows, query, argsWithPage...); err != nil {
 		return nil, 0, err
-	}
-
-	// total は COUNT(*) OVER() から取得。ページが空の場合のみ COUNT(*) をフォールバック
-	total := 0
-	if len(rows) > 0 {
-		total = rows[0].Total
-	} else {
-		countQuery := fmt.Sprintf(`
-			SELECT COUNT(*)
-			FROM orders o
-			JOIN products p ON p.product_id = o.product_id
-			WHERE %s`,
-			strings.Join(conds, " AND "),
-		)
-		if err := r.db.GetContext(ctx, &total, countQuery, args...); err != nil {
-			return nil, 0, err
-		}
-		return []model.Order{}, total, nil
 	}
 
 	orders := make([]model.Order, 0, len(rows))

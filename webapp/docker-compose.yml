@@ -1,7 +1,4 @@
 services:
-  # ----------------------------------------------------
-  # Backend サービス: Go 言語の AP サーバー
-  # ----------------------------------------------------
   backend:
     container_name: tuning-backend
     build:
@@ -10,16 +7,13 @@ services:
       target: production
     environment:
       TZ: Asia/Tokyo
-      DATABASE_URL: "user:password@tcp(db:3306)/42tokyo2508-db"
-      TRACE_ENABLED: "true" # いらない時はfalse
-      JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
-      TRACE_SAMPLE_RATIO: "0.5" # ちょっと下げた
-      # OTEL_TRACES_SAMPLER: "always_off"
-    ports:
-      - "8080:8080"
+      DATABASE_URL: user:password@unix(/var/run/mysqld/mysqld.sock)/42tokyo2508-db
+      APP_SOCKET_PATH: /var/run/app/app.sock
     working_dir: /usr/src/backend
     volumes:
       - ./images:/app/images:ro
+      - mysql_socket:/var/run/mysqld
+      - app_socket:/var/run/app
     networks:
       - webapp-network
     depends_on:
@@ -31,6 +25,8 @@ services:
           "CMD",
           "curl",
           "-I",
+          "--unix-socket",
+          "/var/run/app/app.sock",
           "http://localhost:8080/api/health",
           "-X",
           "GET",
@@ -40,9 +36,6 @@ services:
       retries: 10
       start_period: 30s
 
-  # ----------------------------------------------------
-  # Frontend サービス: クライアントサイドの Web アプリケーション
-  # ----------------------------------------------------
   frontend:
     container_name: tuning-frontend
     build:
@@ -52,8 +45,6 @@ services:
     environment:
       - API_BASE_URL=https://${HOSTNAME}.ftt2508.dabaas.net
       - TZ=Asia/Tokyo
-    ports:
-      - "3000:3000"
     networks:
       - webapp-network
     depends_on:
@@ -67,9 +58,6 @@ services:
       start_period: 20s
     entrypoint: ["sh", "-c", "yarn start --hostname 0.0.0.0 --port 3000"]
 
-  # ----------------------------------------------------
-  # DB サービス: MySQL データベース (Makefile の設定を移行)
-  # ----------------------------------------------------
   db:
     container_name: tuning-mysql
     image: 42tokyo2508.azurecr.io/mysql:base
@@ -88,6 +76,8 @@ services:
       - ./mysql/conf.d:/etc/mysql/conf.d
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/data:/var/lib/mysql
+      - mysql_logs:/var/log/mysql
+      - mysql_socket:/var/run/mysqld
     networks:
       - webapp-network
     healthcheck:
@@ -106,12 +96,10 @@ services:
       timeout: 30s
       retries: 10
       start_period: 1000s
-  # ----------------------------------------------------
-  # Nginx サービス: リバースプロキシと静的ファイル配信
-  # ----------------------------------------------------
+
   nginx:
     container_name: tuning-nginx
-    image: nginx:stable-otel
+    image: nginx:stable
     environment:
       TZ: Asia/Tokyo
     ports:
@@ -121,6 +109,7 @@ services:
       - /da/tls:/da/tls:ro
       - nginx_logs:/var/log/nginx
       - ./images:/app/images:ro
+      - app_socket:/var/run/app
     networks:
       - webapp-network
     depends_on:
@@ -129,30 +118,30 @@ services:
       backend:
         condition: service_healthy
 
-  jaeger:
-    container_name: jaeger
-    image: jaegertracing/all-in-one:1.46
-    environment:
-      TZ: Asia/Tokyo
-    command:
-      - "--query.base-path=/jaeger"
+  pprotein:
+    container_name: pprotein
+    restart: unless-stopped
+    build:
+      context: pprotein
+      dockerfile: Dockerfile
     ports:
-      - "16686:16686" # Jaeger UI
-      - "14268:14268" # Jaeger collector
-      - "14250:14250" # Jaeger gRPC collector
-      - "4318:4318" # OpenTelemetry gRPC receiver
+      - "9000:9000"
     networks:
       - webapp-network
+    volumes:
+      - ./pprotein/data:/opt/pprotein/data
+      - nginx_logs:/var/log/nginx
+      - mysql_logs:/var/log/mysql
+    environment:
+      PPROTEIN_HTTPLOG: "/var/log/nginx/_access.log"
 
-# ----------------------------------------------------
-# ネットワーク定義: コンテナ間の通信
-# ----------------------------------------------------
 networks:
   webapp-network:
     name: webapp-network
     external: true
 
-# signoz でログを収集するのに必要
 volumes:
   nginx_logs:
-    external: true
+  mysql_logs:
+  mysql_socket:
+  app_socket:

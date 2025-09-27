@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const SessionCacheSize = 1024
+const sessionCacheSize = 512
 
 type sessionCacheEntry struct {
 	userID    int
@@ -22,7 +22,7 @@ type SessionRepository struct {
 }
 
 func NewSessionRepository(db DBTX) *SessionRepository {
-	cache, err := lru.New[string, sessionCacheEntry](SessionCacheSize)
+	cache, err := lru.New[string, sessionCacheEntry](sessionCacheSize)
 	if err != nil {
 		panic(err)
 	}

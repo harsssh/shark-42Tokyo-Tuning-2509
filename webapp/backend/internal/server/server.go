@@ -6,15 +6,15 @@ import (
 	"backend/internal/middleware"
 	"backend/internal/repository"
 	"backend/internal/service"
-	"backend/internal/telemetry"
-	"context"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
-	"github.com/riandyrn/otelchi"
+	pprotein "github.com/kaz/pprotein/integration"
 )
 
 type Server struct {
@@ -49,13 +49,8 @@ func NewServer() (*Server, *sqlx.DB, error) {
 	robotAuthMW := middleware.RobotAuthMiddleware(robotAPIKey)
 
 	r := chi.NewRouter()
-	r.Use(otelchi.Middleware(
-		"backend-api",
-		otelchi.WithChiRoutes(r),
-		otelchi.WithFilter(func(req *http.Request) bool {
-			return req.URL.Path != "/api/health"
-		}),
-	))
+
+	r.Handle("/debug/*", pprotein.NewDebugHandler())
 
 	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -97,24 +92,38 @@ func (s *Server) setupRoutes(
 }
 
 func (s *Server) Run() {
-	ctx := context.Background()
-	shutdown, err := telemetry.Init(ctx)
-	if err != nil {
-		log.Fatalf("Failed to initialize telemetry: %v", err)
+	// pprotein 用
+	tcpSrv := &http.Server{
+		Addr:    ":8080",
+		Handler: s.Router,
 	}
-	defer func() {
-		if err := shutdown(context.Background()); err != nil {
-			log.Printf("Failed to shutdown telemetry: %v", err)
+	go func() {
+		log.Printf("Starting server on tcp :8080")
+		if err := tcpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("tcp server error: %v", err)
 		}
 	}()
 
-	appPort := os.Getenv("PORT")
-	if appPort == "" {
-		appPort = "8080"
+	socketPath := os.Getenv("APP_SOCKET_PATH")
+	if socketPath == "" {
+		socketPath = "/var/run/app/app.sock"
+	}
+	_ = os.Remove(socketPath)
+
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		log.Fatalf("listen unix: %v", err)
+	}
+	if err := os.Chmod(socketPath, 0666); err != nil {
+		log.Printf("chmod socket: %v", err)
 	}
 
-	log.Printf("Starting server on :%s", appPort)
-	if err := http.ListenAndServe(":"+appPort, s.Router); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	unixSrv := &http.Server{
+		Handler: s.Router,
+	}
+
+	log.Printf("Starting server on unix socket %s", socketPath)
+	if err := unixSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("server error: %v", err)
 	}
 }
