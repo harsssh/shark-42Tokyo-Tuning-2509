@@ -27,6 +27,24 @@ type RobotService struct {
 	lightweightCacheHint int
 }
 
+var (
+	dpPool = sync.Pool{
+		New: func() interface{} {
+			return make([]int, 0)
+		},
+	}
+	choicePool = sync.Pool{
+		New: func() interface{} {
+			return make([]*knapChoice, 0)
+		},
+	}
+)
+
+type knapChoice struct {
+	orderIndex int
+	prev       *knapChoice
+}
+
 func NewRobotService(store *repository.Store) *RobotService {
 	return &RobotService{store: store}
 }
@@ -106,9 +124,6 @@ func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, new
 			}
 			if newStatus == "completed" {
 				hint := defaultRobotCapacityHint
-				if hint <= 0 {
-					hint = 100
-				}
 				if err := s.replenishShippingOrders(ctx, txStore, shippingPoolTarget, hint); err != nil {
 					log.Printf("Failed to replenish shipping orders after completion: %v", err)
 				}
@@ -126,71 +141,57 @@ func bestSelectOrdersForDelivery(
 ) (model.DeliveryPlan, error) {
 	n := len(orders)
 	if n == 0 || robotCapacity <= 0 {
-		return model.DeliveryPlan{RobotID: robotID}, nil
+		return model.DeliveryPlan{RobotID: robotID, Orders: []model.Order{}}, nil
 	}
 
-	// 価値密度でソート（分岐限定法で使用）
-	sortedOrders := make([]model.Order, len(orders))
-	copy(sortedOrders, orders)
-	sort.Slice(sortedOrders, func(i, j int) bool {
-		if sortedOrders[i].Weight == 0 && sortedOrders[j].Weight == 0 {
-			return sortedOrders[i].Value > sortedOrders[j].Value
+	filtered := make([]model.Order, 0, n)
+	for _, o := range orders {
+		if o.Weight <= 0 || o.Value < 0 {
+			continue
 		}
-		if sortedOrders[i].Weight == 0 {
-			return true
+		if o.Weight > robotCapacity {
+			continue
 		}
-		if sortedOrders[j].Weight == 0 {
-			return false
+		filtered = append(filtered, o)
+	}
+	if len(filtered) == 0 {
+		return model.DeliveryPlan{RobotID: robotID, Orders: []model.Order{}}, nil
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].OrderID == filtered[j].OrderID {
+			return filtered[i].ProductID < filtered[j].ProductID
 		}
-		ratioI := float64(sortedOrders[i].Value) / float64(sortedOrders[i].Weight)
-		ratioJ := float64(sortedOrders[j].Value) / float64(sortedOrders[j].Weight)
-		return ratioI > ratioJ
+		return filtered[i].OrderID < filtered[j].OrderID
 	})
 
-	// 本番大規模データ対応のアルゴリズム選択
-	if int64(n)*int64(robotCapacity) <= 1e6 {
-		// 小問題: 完全DP
-		return dpSolution(sortedOrders, robotID, robotCapacity)
-	} else if n <= 2000 && robotCapacity <= 10000 {
-		// 中問題: 分岐限定法（制限時間あり）
-		return timeConstrainedBranchAndBound(ctx, sortedOrders, robotID, robotCapacity)
-	} else {
-		// 大問題: 高品質近似アルゴリズム
-		return scalableHighQualitySolution(ctx, sortedOrders, robotID, robotCapacity)
-	}
+	return dpSolution(filtered, robotID, robotCapacity)
 }
 
 func dpSolution(orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
 	W := robotCapacity
-	type knapChoice struct {
-		orderIndex int
-		prev       *knapChoice
-	}
 
-	dp := make([]int, W+1)
-	choices := make([]*knapChoice, W+1)
+	dpBuf := getDPBuffer(W)
+	choicesBuf := getChoiceBuffer(W)
 
 	for i, o := range orders {
 		w, v := o.Weight, o.Value
-		if w <= 0 || v < 0 {
-			continue
-		}
-		if w > W {
+		if w <= 0 || v < 0 || w > W {
 			continue
 		}
 		for cw := W; cw >= w; cw-- {
-			alt := dp[cw-w] + v
-			if alt > dp[cw] {
-				dp[cw] = alt
-				choices[cw] = &knapChoice{orderIndex: i, prev: choices[cw-w]}
+			alt := dpBuf[cw-w] + v
+			if alt > dpBuf[cw] {
+				dpBuf[cw] = alt
+				choicesBuf[cw] = &knapChoice{orderIndex: i, prev: choicesBuf[cw-w]}
 			}
 		}
 	}
 
 	bestW, bestV := 0, 0
 	for w := 0; w <= W; w++ {
-		if dp[w] > bestV {
-			bestV = dp[w]
+		if dpBuf[w] > bestV {
+			bestV = dpBuf[w]
 			bestW = w
 		}
 	}
@@ -200,12 +201,15 @@ func dpSolution(orders []model.Order, robotID string, robotCapacity int) (model.
 		totalWeight int
 		totalValue  int
 	)
-	for node := choices[bestW]; node != nil; node = node.prev {
+	for node := choicesBuf[bestW]; node != nil; node = node.prev {
 		order := orders[node.orderIndex]
 		picked = append(picked, order)
 		totalWeight += order.Weight
 		totalValue += order.Value
 	}
+
+	putDPBuffer(dpBuf)
+	putChoiceBuffer(choicesBuf)
 
 	return model.DeliveryPlan{
 		RobotID:     robotID,
@@ -213,6 +217,48 @@ func dpSolution(orders []model.Order, robotID string, robotCapacity int) (model.
 		TotalValue:  totalValue,
 		Orders:      picked,
 	}, nil
+}
+
+func getDPBuffer(capacity int) []int {
+	buf := dpPool.Get().([]int)
+	needed := capacity + 1
+	if cap(buf) < needed {
+		buf = make([]int, needed)
+	} else {
+		buf = buf[:needed]
+		for i := range buf {
+			buf[i] = 0
+		}
+	}
+	return buf
+}
+
+func putDPBuffer(buf []int) {
+	for i := range buf {
+		buf[i] = 0
+	}
+	dpPool.Put(buf[:0])
+}
+
+func getChoiceBuffer(capacity int) []*knapChoice {
+	buf := choicePool.Get().([]*knapChoice)
+	needed := capacity + 1
+	if cap(buf) < needed {
+		buf = make([]*knapChoice, needed)
+	} else {
+		buf = buf[:needed]
+		for i := range buf {
+			buf[i] = nil
+		}
+	}
+	return buf
+}
+
+func putChoiceBuffer(buf []*knapChoice) {
+	for i := range buf {
+		buf[i] = nil
+	}
+	choicePool.Put(buf[:0])
 }
 
 func branchAndBoundSolution(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
@@ -448,6 +494,7 @@ func lightLocalSearch(ctx context.Context, currentOrders []model.Order, allOrder
 	bestOrders := make([]model.Order, len(currentOrders))
 	copy(bestOrders, currentOrders)
 	bestValue := calculateTotalValue(bestOrders)
+	currentWeight := calculateTotalWeight(bestOrders)
 
 	improved := true
 	iterations := 0
@@ -472,34 +519,26 @@ func lightLocalSearch(ctx context.Context, currentOrders []model.Order, allOrder
 		}
 
 		// 交換のみ実行（追加は行わない）
+	outer:
 		for i, selectedOrder := range bestOrders {
 			for _, candidateOrder := range allOrders {
 				if selectedMap[candidateOrder.OrderID] {
 					continue
 				}
-
-				// 交換して容量制限内かチェック
-				currentWeight := calculateTotalWeight(bestOrders)
 				newWeight := currentWeight - selectedOrder.Weight + candidateOrder.Weight
-
-				if newWeight <= capacity {
-					testOrders := make([]model.Order, len(bestOrders))
-					copy(testOrders, bestOrders)
-					testOrders[i] = candidateOrder
-
-					testValue := calculateTotalValue(testOrders)
-					if testValue > bestValue {
-						bestOrders = testOrders
-						bestValue = testValue
-						improved = true
-						selectedMap[selectedOrder.OrderID] = false
-						selectedMap[candidateOrder.OrderID] = true
-						break
-					}
+				if newWeight > capacity {
+					continue
 				}
-			}
-			if improved {
-				break
+				newValue := bestValue - selectedOrder.Value + candidateOrder.Value
+				if newValue > bestValue {
+					bestOrders[i] = candidateOrder
+					bestValue = newValue
+					currentWeight = newWeight
+					selectedMap[selectedOrder.OrderID] = false
+					selectedMap[candidateOrder.OrderID] = true
+					improved = true
+					break outer
+				}
 			}
 		}
 	}
@@ -529,14 +568,14 @@ func (s *RobotService) replenishShippingOrders(ctx context.Context, txStore *rep
 	if len(products) == 0 {
 		return nil
 	}
-	orders := make([]*model.Order, 0, len(products))
+	ordersToCreate := make([]*model.Order, 0, len(products))
 	for i, p := range products {
-		orders = append(orders, &model.Order{
+		ordersToCreate = append(ordersToCreate, &model.Order{
 			UserID:    1 + (i % 100),
 			ProductID: p.ProductID,
 		})
 	}
-	_, err = txStore.OrderRepo.BatchCreate(ctx, orders)
+	_, err = txStore.OrderRepo.BatchCreate(ctx, ordersToCreate)
 	return err
 }
 
