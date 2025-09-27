@@ -62,7 +62,6 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 func (r *OrderRepository) onUpdateOrders() {
 	r.state.mu.Lock()
 	r.state.shippingOrdersVersion++
-	log.Printf("OrderRepository: current shippingOrdersVersion=%d\n", r.state.shippingOrdersVersion)
 	r.state.mu.Unlock()
 
 	r.state.countCache.Purge()
