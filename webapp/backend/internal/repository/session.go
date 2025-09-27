@@ -2,17 +2,34 @@ package repository
 
 import (
 	"context"
+	"errors"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+const SessionCacheSize = 1024
+
+type sessionCacheEntry struct {
+	userID    int
+	expiresAt time.Time
+}
+
 type SessionRepository struct {
-	db DBTX
+	db    DBTX
+	cache *lru.Cache[string, sessionCacheEntry] // sessionID -> {userID, expiresAt}
 }
 
 func NewSessionRepository(db DBTX) *SessionRepository {
-	return &SessionRepository{db: db}
+	cache, err := lru.New[string, sessionCacheEntry](SessionCacheSize)
+	if err != nil {
+		panic(err)
+	}
+	return &SessionRepository{
+		db:    db,
+		cache: cache,
+	}
 }
 
 // セッションを作成し、セッションIDと有効期限を返す
@@ -29,19 +46,33 @@ func (r *SessionRepository) Create(ctx context.Context, userBusinessID int, dura
 	if err != nil {
 		return "", time.Time{}, err
 	}
+
+	// キャッシュへ保存
+	r.cache.Add(sessionIDStr, sessionCacheEntry{userID: userBusinessID, expiresAt: expiresAt})
+
 	return sessionIDStr, expiresAt, nil
 }
 
 // セッションIDからユーザーIDを取得
 func (r *SessionRepository) FindUserBySessionID(ctx context.Context, sessionID string) (int, error) {
+	now := time.Now()
+
+	// 先にキャッシュを確認 (あるはず)
+	if v, ok := r.cache.Get(sessionID); ok {
+		if now.Before(v.expiresAt) {
+			return v.userID, nil
+		}
+		r.cache.Remove(sessionID)
+		return 0, errors.New("session expired")
+	}
+
 	var userID int
 	query := `
 		SELECT 
 			s.user_id
 		FROM user_sessions s
 		WHERE s.session_uuid = ? AND s.expires_at > ?`
-	err := r.db.GetContext(ctx, &userID, query, sessionID, time.Now())
-	if err != nil {
+	if err := r.db.GetContext(ctx, &userID, query, sessionID, now); err != nil {
 		return 0, err
 	}
 	return userID, nil
