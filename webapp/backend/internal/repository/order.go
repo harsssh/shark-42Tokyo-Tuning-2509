@@ -181,13 +181,12 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 		if searchType == "prefix" {
 			// 前方一致
 			searchPattern = s + "%"
-			conds = append(conds, "p.name LIKE ?")
 		} else {
 			// 部分一致
 			searchType = "partial"
-			searchPattern = "*" + s + "*"
-			conds = append(conds, "MATCH(p.name) AGAINST (? IN BOOLEAN MODE)")
+			searchPattern = "%" + s + "%"
 		}
+		conds = append(conds, "p.name LIKE ?")
 		args = append(args, searchPattern)
 	}
 
