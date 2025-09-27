@@ -9,6 +9,8 @@ fi
 
 PREVIOUS_REMAINING=""
 
+FLAG=0
+
 while true; do
     RESPONSE=$(curl -s -G "https://intermediate.ftt2508.dabaas.net/get_status" --data-urlencode "jobId=$JOB_ID")
 
@@ -29,6 +31,12 @@ while true; do
             printf '%s\n' 'curl -N --http1.1 -H "Accept: text/event-stream" "https://intermediate.ftt2509.dabaas.net/waiting-stream"'
             ;;
         "running")
+
+            if [ $FLAG -eq 0 ]; then
+                curl localhost:9000/api/group/collect
+                FLAG=1
+            fi
+
             PROGRESS=$(echo "$RESPONSE" | jq -r '.progress')
             if [ "$PROGRESS" -eq 100 ]; then
                 printf "\r\033[Kスコアを計算中です%-5s" "$DOTS"

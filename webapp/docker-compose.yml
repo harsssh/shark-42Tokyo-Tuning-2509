@@ -84,6 +84,7 @@ services:
       - ./mysql/conf.d:/etc/mysql/conf.d
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/data:/var/lib/mysql
+      - mysql_logs:/var/log/mysql
     networks:
       - webapp-network
     healthcheck:
@@ -107,7 +108,7 @@ services:
   # ----------------------------------------------------
   nginx:
     container_name: tuning-nginx
-    image: nginx:stable-otel
+    image: nginx:stable
     environment:
       TZ: Asia/Tokyo
     ports:
@@ -125,6 +126,21 @@ services:
       backend:
         condition: service_healthy
 
+  pprotein:
+    container_name: pprotein
+    restart: unless-stopped
+    build:
+      context: pprotein
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./pprotein/data:/opt/pprotein/data
+      - nginx_logs:/var/log/nginx
+      - mysql_logs:/var/log/mysql
+    environment:
+      PPROTEIN_HTTPLOG: "/var/log/nginx/_access.log"
+
 # ----------------------------------------------------
 # ネットワーク定義: コンテナ間の通信
 # ----------------------------------------------------
@@ -133,7 +149,6 @@ networks:
     name: webapp-network
     external: true
 
-# signoz でログを収集するのに必要
 volumes:
   nginx_logs:
-    external: true
+  mysql_logs:
