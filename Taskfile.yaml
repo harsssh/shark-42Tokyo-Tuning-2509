@@ -35,6 +35,10 @@ tasks:
 
   bench:
     desc: ベンチマークを実行
+    preconditions:
+      - sh: '[[ "$(hostname)" =~ ^ftt ]]'
+        msg: "本番環境のみ有効です"
+    dir: /home/azureuser/shark-42Tokyo-Tuning-2509/
     cmds:
       - bash -x run.sh
 

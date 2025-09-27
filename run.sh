@@ -117,9 +117,9 @@ if [[ $HOSTNAME == ftt2508-* ]]; then
     echo -e "\n\n===================================================\n\n"
     echo -e "負荷試験のリクエストに成功しました。"
     echo -e "ジョブID: $JOB_ID"
-    echo -e "上記のジョブIDをもとに負荷試験のステータスを確認できます"
-    echo -e "bash get_test_status.sh $JOB_ID"
     echo -e "\n\n===================================================\n\n"
+
+    bash ./get_test_status.sh $JOB_ID
 
 else
     # ===============================

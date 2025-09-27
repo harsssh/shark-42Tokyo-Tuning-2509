@@ -105,7 +105,6 @@ func (h *ProductHandler) CreateOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProductHandler) GetImage(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("画像リクエスト受信: %s\n", r.URL.String())
 	imagePath := r.URL.Query().Get("path")
 	if imagePath == "" {
 		fmt.Println("画像パスが空です")
