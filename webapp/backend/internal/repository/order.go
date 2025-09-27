@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	shippingOrderCacheSize = 1024
+	shippingOrderCacheSize = 32
 	shippingOrderCacheKey  = "shipping_orders_v1"
 )
 

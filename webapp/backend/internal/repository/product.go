@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var ProductListCountCacheSize = 1024
+var ProductListCountCacheSize = 64
 
 type ProductRepository struct {
 	db    DBTX
