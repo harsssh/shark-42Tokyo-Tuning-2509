@@ -5,14 +5,24 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/samber/lo"
 	"strings"
 	"sync"
 
 	"github.com/jmoiron/sqlx"
 )
 
+const orderListCountCacheSize = 128
+
+type orderCountCacheKey struct {
+	userID        int
+	searchPattern string
+}
+
 type orderRepoState struct {
 	shippingOrdersVersion int64
+	countCache            *lru.Cache[orderCountCacheKey, int]
 	mu                    sync.RWMutex
 }
 
@@ -25,6 +35,13 @@ func newOrderRepository(db DBTX, state *orderRepoState) *OrderRepository {
 	if state == nil {
 		state = &orderRepoState{}
 	}
+
+	state.mu.Lock()
+	if state.countCache == nil {
+		state.countCache = lo.Must(lru.New[orderCountCacheKey, int](orderListCountCacheSize))
+	}
+	state.mu.Unlock()
+
 	return &OrderRepository{
 		db:    db,
 		state: state,
@@ -41,10 +58,33 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 	return r.state.shippingOrdersVersion, nil
 }
 
-func (r *OrderRepository) incrementShippingOrdersVersion() {
+func (r *OrderRepository) onUpdateOrders() {
 	r.state.mu.Lock()
 	r.state.shippingOrdersVersion++
 	r.state.mu.Unlock()
+
+	r.state.countCache.Purge()
+}
+
+func (r *OrderRepository) getCachedOrderCount(key orderCountCacheKey) (int, bool) {
+	r.state.mu.RLock()
+	cache := r.state.countCache
+	r.state.mu.RUnlock()
+
+	if cache == nil {
+		return 0, false
+	}
+	return cache.Get(key)
+}
+
+func (r *OrderRepository) setCachedOrderCount(key orderCountCacheKey, total int) {
+	r.state.mu.RLock()
+	cache := r.state.countCache
+	r.state.mu.RUnlock()
+	if cache == nil {
+		return
+	}
+	cache.Add(key, total)
 }
 
 // ダメだったら Create を復旧する
@@ -66,7 +106,7 @@ func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order
 		return nil, err
 	}
 
-	r.incrementShippingOrdersVersion()
+	r.onUpdateOrders()
 
 	// NOTE: 結構怖い
 	var insertedIDs []string
@@ -99,7 +139,7 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 	_, err = r.db.ExecContext(ctx, query, args...)
 
 	if err == nil {
-		r.incrementShippingOrdersVersion()
+		r.onUpdateOrders()
 	}
 
 	return err
@@ -135,11 +175,13 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 
 	if s := strings.TrimSpace(req.Search); s != "" {
 		searchApplied = true
-		if strings.ToLower(req.Type) == "prefix" {
+		searchType := strings.ToLower(req.Type)
+		if searchType == "prefix" {
 			// 前方一致
 			searchPattern = s + "%"
 		} else {
 			// 部分一致
+			searchType = "partial"
 			searchPattern = "%" + s + "%"
 		}
 		conds = append(conds, "p.name LIKE ?")
@@ -147,22 +189,31 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 	}
 
 	// 件数の取得。検索条件がなければ orders のみでカウントして余計な JOIN を避ける
-	countQuery := "SELECT COUNT(*) FROM orders o WHERE o.user_id = ?"
-	countArgs := []any{userID}
-	if searchApplied {
-		countQuery = fmt.Sprintf(`
+	countQuery := lo.Ternary(searchApplied,
+		fmt.Sprintf(`
             SELECT COUNT(*)
             FROM orders o
             JOIN products p ON p.product_id = o.product_id
             WHERE %s`,
 			strings.Join(conds, " AND "),
-		)
-		countArgs = append(countArgs, searchPattern)
-	}
+		),
+		"SELECT COUNT(*) FROM orders o WHERE o.user_id = ?",
+	)
+	countArgs := lo.Ternary(searchApplied,
+		[]any{userID, searchPattern},
+		[]any{userID},
+	)
 
-	total := 0
-	if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
-		return nil, 0, err
+	cacheKey := orderCountCacheKey{
+		userID:        userID,
+		searchPattern: searchPattern,
+	}
+	total, cached := r.getCachedOrderCount(cacheKey)
+	if !cached {
+		if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
+			return nil, 0, err
+		}
+		r.setCachedOrderCount(cacheKey, total)
 	}
 	if total == 0 {
 		return []model.Order{}, 0, nil
