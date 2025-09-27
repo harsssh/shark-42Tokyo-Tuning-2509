@@ -21,17 +21,17 @@ ALTER TABLE orders
     LOCK = SHARED,
     ADD COLUMN shipped_status_code TINYINT
         AS (CASE shipped_status
-                -- completed < delivering < shipping の順番
+            -- completed < delivering < shipping の順番
                 WHEN 'completed' THEN 0
                 WHEN 'delivering' THEN 1
                 WHEN 'shipping' THEN 2
             END
-            ) STORED,
-    ADD INDEX idx_orders_shipped_status_product_id_order_id (shipped_status_code, product_id, order_id);
+            ) STORED;
 
 ALTER TABLE orders
     ALGORITHM = INPLACE,
     LOCK = NONE,
+    ADD INDEX idx_orders_shipped_status_product_id_order_id (shipped_status_code, product_id, order_id),
     ADD INDEX idx_orders_user_id_shipped_status_code_order_id (user_id, shipped_status_code, order_id),
     ADD INDEX idx_orders_user_id_created_at (user_id, created_at),
     ADD INDEX idx_orders_user_id_order_id (user_id, order_id);
