@@ -128,8 +128,8 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 			args = append(args, s+"%")
 		} else {
 			// 部分一致
-			conds = append(conds, "MATCH(p.name) AGAINST (? IN BOOLEAN MODE)")
-			args = append(args, "*"+s+"*")
+			conds = append(conds, "p.name like ?")
+			args = append(args, "%"+s+"%")
 		}
 	}
 

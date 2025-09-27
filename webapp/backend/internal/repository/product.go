@@ -34,8 +34,9 @@ func (r *ProductRepository) ListProducts(
 	args := make([]interface{}, 0, 1)
 
 	if s := strings.TrimSpace(req.Search); s != "" {
-		where = "WHERE MATCH(name, description) AGAINST (? IN BOOLEAN MODE)"
-		args = append(args, "*"+s+"*")
+		where = "WHERE name LIKE ? OR description LIKE ?"
+		pattern := "%" + s + "%"
+		args = append(args, pattern, pattern)
 	}
 
 	// 総件数
