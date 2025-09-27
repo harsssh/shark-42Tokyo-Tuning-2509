@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	pprotein "github.com/kaz/pprotein/integration"
 )
 
 type Server struct {
@@ -46,6 +47,8 @@ func NewServer() (*Server, *sqlx.DB, error) {
 	robotAuthMW := middleware.RobotAuthMiddleware(robotAPIKey)
 
 	r := chi.NewRouter()
+
+	r.Handle("/debug/*", pprotein.NewDebugHandler())
 
 	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
