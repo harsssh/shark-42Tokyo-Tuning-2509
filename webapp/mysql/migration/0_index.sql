@@ -22,4 +22,5 @@ ALTER TABLE orders
     -- delivery plan を作るときの orders の join に使う (covering index)
     ADD INDEX idx_orders_shipped_status_product_id_order_id (shipped_status, product_id, order_id),
     ADD INDEX idx_orders_user_id_shipped_status_order_id (user_id, shipped_status, order_id),
-    ADD INDEX idx_orders_user_id_created_at (user_id, created_at);
+    ADD INDEX idx_orders_user_id_created_at (user_id, created_at),
+    ADD INDEX idx_orders_user_id_order_id (user_id, order_id);
