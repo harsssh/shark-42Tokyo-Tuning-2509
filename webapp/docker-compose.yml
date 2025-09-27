@@ -88,8 +88,6 @@ services:
       - ./mysql/conf.d:/etc/mysql/conf.d
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/data:/var/lib/mysql
-    shm_size: '2gb'
-    command: ["mysqld", "--tmpdir=/dev/shm"]
     networks:
       - webapp-network
     healthcheck:
