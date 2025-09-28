@@ -80,6 +80,7 @@ services:
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/local_data:/var/lib/mysql
       - ./mysql/init/restoreSQL:/docker-entrypoint-initdb.d/init/restoreSQL
+      - mysql-logs:/var/log/mysql
     networks:
       - webapp-network
     healthcheck:
@@ -148,6 +149,8 @@ services:
       - mysql-logs:/var/log/mysql
     environment:
       PPROTEIN_HTTPLOG: "/var/log/nginx/_access.log"
+      # デフォルト
+      PPROTEIN_SLOWLOG: "/var/log/mysql/mysql-slow.log"
 
 # ----------------------------------------------------
 # ネットワーク定義: コンテナ間の通信
@@ -159,3 +162,4 @@ networks:
 
 volumes:
   nginx-logs:
+  mysql-logs:
