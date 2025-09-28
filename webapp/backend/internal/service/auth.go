@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"backend/internal/repository"
@@ -21,11 +24,17 @@ var (
 )
 
 type AuthService struct {
-	store *repository.Store
+	store         *repository.Store
+	passwordCache *sync.Map
 }
 
 func NewAuthService(store *repository.Store) *AuthService {
-	return &AuthService{store: store}
+	return &AuthService{store: store, passwordCache: &sync.Map{}}
+}
+
+func makePasswordCacheKey(passwordHash, password string) string {
+	digest := sha256.Sum256([]byte(password))
+	return passwordHash + ":" + hex.EncodeToString(digest[:])
 }
 
 func (s *AuthService) Login(ctx context.Context, userName, password string) (string, time.Time, error) {
@@ -44,11 +53,15 @@ func (s *AuthService) Login(ctx context.Context, userName, password string) (str
 			return ErrInternalServer
 		}
 
-		err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
-		if err != nil {
-			log.Printf("[Login] パスワード検証失敗: %v", err)
-			span.RecordError(err)
-			return ErrInvalidPassword
+		cacheKey := makePasswordCacheKey(user.PasswordHash, password)
+		if _, ok := s.passwordCache.Load(cacheKey); !ok {
+			err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
+			if err != nil {
+				log.Printf("[Login] パスワード検証失敗: %v", err)
+				span.RecordError(err)
+				return ErrInvalidPassword
+			}
+			s.passwordCache.Store(cacheKey, struct{}{})
 		}
 
 		sessionDuration := 24 * time.Hour
