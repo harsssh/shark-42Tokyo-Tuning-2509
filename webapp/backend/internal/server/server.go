@@ -93,16 +93,16 @@ func (s *Server) setupRoutes(
 
 func (s *Server) Run() {
 	// pprotein 用
-	tcpSrv := &http.Server{
-		Addr:    ":8080",
-		Handler: s.Router,
-	}
-	go func() {
-		log.Printf("Starting server on tcp :8080")
-		if err := tcpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("tcp server error: %v", err)
-		}
-	}()
+	//tcpSrv := &http.Server{
+	//	Addr:    ":8080",
+	//	Handler: s.Router,
+	//}
+	//go func() {
+	//	log.Printf("Starting server on tcp :8080")
+	//	if err := tcpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	//		log.Fatalf("tcp server error: %v", err)
+	//	}
+	//}()
 
 	socketPath := os.Getenv("APP_SOCKET_PATH")
 	if socketPath == "" {
