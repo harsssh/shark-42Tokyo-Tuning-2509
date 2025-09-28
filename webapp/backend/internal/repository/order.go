@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/samber/lo"
 	"strings"
 	"sync"
 
@@ -20,11 +19,14 @@ const (
 )
 
 type orderRepoState struct {
-	// 更新のたびにインクリメントされるバージョン
+	// 更新のたびにインクリメントされるバージョン（配送中一覧キャッシュ用）
 	shippingOrdersVersion int64
 
 	// GetShippingOrders の結果キャッシュ（参照返却前提）
 	shippingOrdersCache []model.Order
+
+	// user_id のみの COUNT(*) キャッシュ
+	countByUser map[int]int
 
 	mu sync.RWMutex
 }
@@ -35,6 +37,11 @@ type OrderRepository struct {
 }
 
 func newOrderRepository(db DBTX, state *orderRepoState) *OrderRepository {
+	state.mu.Lock()
+	if state.countByUser == nil {
+		state.countByUser = make(map[int]int)
+	}
+	state.mu.Unlock()
 	return &OrderRepository{
 		db:    db,
 		state: state,
@@ -49,9 +56,12 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 
 func (r *OrderRepository) onUpdateOrders() {
 	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+
 	r.state.shippingOrdersVersion++
 	r.state.shippingOrdersCache = nil
-	r.state.mu.Unlock()
+	// TODO: 一部だけ無効化できないか
+	r.state.countByUser = make(map[int]int)
 }
 
 // ダメだったら Create を復旧する
@@ -137,7 +147,6 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
 		return nil, err
 	}
 
-	// 取得中に更新が入っていないことを確認してからキャッシュに格納
 	r.state.mu.Lock()
 	if r.state.shippingOrdersVersion == localVer && r.state.shippingOrdersCache == nil {
 		r.state.shippingOrdersCache = orders
@@ -173,26 +182,34 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 		args = append(args, searchPattern)
 	}
 
-	// 件数の取得。検索条件がなければ orders のみでカウントして余計な JOIN を避ける
-	countQuery := lo.Ternary(searchApplied,
-		fmt.Sprintf(`
+	var total int
+	if !searchApplied {
+		r.state.mu.RLock()
+		cached, ok := r.state.countByUser[userID]
+		r.state.mu.RUnlock()
+		if ok {
+			total = cached
+		} else {
+			const countQuery = "SELECT COUNT(*) FROM orders o WHERE o.user_id = ?"
+			if err := r.db.GetContext(ctx, &total, countQuery, userID); err != nil {
+				return nil, 0, err
+			}
+			r.state.mu.Lock()
+			r.state.countByUser[userID] = total
+			r.state.mu.Unlock()
+		}
+	} else {
+		countQuery := fmt.Sprintf(`
             SELECT COUNT(*)
             FROM orders o
             JOIN products p ON p.product_id = o.product_id
-            WHERE %s`,
-			strings.Join(conds, " AND "),
-		),
-		"SELECT COUNT(*) FROM orders o WHERE o.user_id = ?",
-	)
-	countArgs := lo.Ternary(searchApplied,
-		[]any{userID, searchPattern},
-		[]any{userID},
-	)
-
-	var total int
-	if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
-		return nil, 0, err
+            WHERE %s`, strings.Join(conds, " AND "),
+		)
+		if err := r.db.GetContext(ctx, &total, countQuery, userID, searchPattern); err != nil {
+			return nil, 0, err
+		}
 	}
+
 	if total == 0 {
 		return []model.Order{}, 0, nil
 	}
