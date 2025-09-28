@@ -165,7 +165,7 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
 				 FROM orders o
 						  JOIN products p
 							   ON o.product_id = p.product_id
-				 WHERE o.shipped_status_code = 'shipping'
+				 WHERE o.shipped_status_code = ?
 			 ) t
 		WHERE rn = 1;
     `
