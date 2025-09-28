@@ -14,21 +14,14 @@ import (
 )
 
 const (
-	orderListCountCacheSize = 128
 	// 本来はモデルにあるべきそう
 	shippedStatusEnumShipping   = 2
 	shippedStatusEnumDelivering = 1
 	shippedStatusEnumCompleted  = 0
 )
 
-type orderCountCacheKey struct {
-	userID        int
-	searchPattern string
-}
-
 type orderRepoState struct {
 	shippingOrdersVersion int64
-	countCache            *lru.Cache[orderCountCacheKey, int]
 	mu                    sync.RWMutex
 }
 
@@ -38,20 +31,10 @@ type OrderRepository struct {
 }
 
 func newOrderRepository(db DBTX, state *orderRepoState) *OrderRepository {
-	state.mu.Lock()
-	if state.countCache == nil {
-		state.countCache = lo.Must(lru.New[orderCountCacheKey, int](orderListCountCacheSize))
-	}
-	state.mu.Unlock()
-
 	return &OrderRepository{
 		db:    db,
 		state: state,
 	}
-}
-
-func NewOrderRepository(db DBTX) *OrderRepository {
-	return newOrderRepository(db, &orderRepoState{})
 }
 
 func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, error) {
@@ -64,29 +47,6 @@ func (r *OrderRepository) onUpdateOrders() {
 	r.state.mu.Lock()
 	r.state.shippingOrdersVersion++
 	r.state.mu.Unlock()
-
-	r.state.countCache.Purge()
-}
-
-func (r *OrderRepository) getCachedOrderCount(key orderCountCacheKey) (int, bool) {
-	r.state.mu.RLock()
-	cache := r.state.countCache
-	r.state.mu.RUnlock()
-
-	if cache == nil {
-		return 0, false
-	}
-	return cache.Get(key)
-}
-
-func (r *OrderRepository) setCachedOrderCount(key orderCountCacheKey, total int) {
-	r.state.mu.RLock()
-	cache := r.state.countCache
-	r.state.mu.RUnlock()
-	if cache == nil {
-		return
-	}
-	cache.Add(key, total)
 }
 
 // ダメだったら Create を復旧する
@@ -206,16 +166,9 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 		[]any{userID},
 	)
 
-	cacheKey := orderCountCacheKey{
-		userID:        userID,
-		searchPattern: searchPattern,
-	}
-	total, cached := r.getCachedOrderCount(cacheKey)
-	if !cached {
-		if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
-			return nil, 0, err
-		}
-		r.setCachedOrderCount(cacheKey, total)
+	var total int
+	if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
+		return nil, 0, err
 	}
 	if total == 0 {
 		return []model.Order{}, 0, nil
