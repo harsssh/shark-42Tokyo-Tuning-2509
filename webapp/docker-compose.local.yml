@@ -80,6 +80,7 @@ services:
       - ./mysql/migration:/etc/mysql/migration
       - ./mysql/local_data:/var/lib/mysql
       - ./mysql/init/restoreSQL:/docker-entrypoint-initdb.d/init/restoreSQL
+      - mysql-logs:/var/log/mysql
     networks:
       - webapp-network
     healthcheck:
@@ -108,6 +109,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.local.conf:/etc/nginx/nginx.conf
+      - nginx-logs:/var/log/nginx
     networks:
       - webapp-network
     depends_on:
@@ -132,6 +134,24 @@ services:
     networks:
       - webapp-network
 
+  pprotein:
+    container_name: pprotein
+    build:
+      context: pprotein
+    ports:
+      - "9000:9000"
+    networks:
+      - webapp-network
+    working_dir: /etc/pprotein
+    volumes:
+      - ./pprotein/data:/etc/pprotein/data
+      - nginx-logs:/var/log/nginx
+      - mysql-logs:/var/log/mysql
+    environment:
+      PPROTEIN_HTTPLOG: "/var/log/nginx/_access.log"
+      # デフォルト
+      PPROTEIN_SLOWLOG: "/var/log/mysql/mysql-slow.log"
+
 # ----------------------------------------------------
 # ネットワーク定義: コンテナ間の通信
 # ----------------------------------------------------
@@ -139,3 +159,7 @@ networks:
   webapp-network:
     name: webapp-network
     external: true
+
+volumes:
+  nginx-logs:
+  mysql-logs:

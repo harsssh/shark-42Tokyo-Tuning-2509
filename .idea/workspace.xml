@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="61c2ca5e-7e64-4eac-935d-7a63d7cf2970" name="Changes" comment="fixup! pprotein のソースコードを配置">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Go File" />
+      </list>
+    </option>
+  </component>
+  <component name="GOROOT" url="file://$USER_HOME$/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.23.11.darwin-arm64" />
+  <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="fix-plan" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="ROOT_SYNC" value="DONT_SYNC" />
+    <option name="UPDATE_TYPE" value="REBASE" />
+  </component>
+  <component name="GitRewordedCommitMessages">
+    <option name="onto" value="87ef2de40ce4f8baeda4f5d97e075ec62307aea8" />
+  </component>
+  <component name="KubernetesApiPersistence">{}</component>
+  <component name="KubernetesApiProvider">{
+  &quot;isMigrated&quot;: true
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1
+}</component>
+  <component name="ProjectId" id="33F8Kz0p2bq17TgtTJxj2BhZ5pn" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true">
+    <OptionsSetting value="false" id="Update" />
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "DefaultGoTemplateProperty": "Go File",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.migrated.go.modules.settings": "true",
+    "RunOnceActivity.go.modules.go.list.on.any.changes.was.set": "true",
+    "git-widget-placeholder": "introduce-pprotein",
+    "go.import.settings.migrated": "true",
+    "go.sdk.automatically.set": "true",
+    "last_opened_file_path": "/Users/kemizuki/Documents/dev/shark-42Tokyo-Tuning-2509",
+    "node.js.detected.package.eslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "project.propVCSSupport.DirectoryMappings",
+    "ts.external.directory.path": "/Users/kemizuki/Documents/dev/shark-42Tokyo-Tuning-2509/webapp/frontend/node_modules/typescript/lib"
+  },
+  "keyToStringList": {
+    "DatabaseDriversLRU": [
+      "mysql"
+    ]
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-gosdk-d297c17c1fbd-85c80fddc9a6-org.jetbrains.plugins.go.sharedIndexes.bundled-GO-243.23654.166" />
+        <option value="bundled-js-predefined-d6986cc7102b-822845ee3bb5-JavaScript-GO-243.23654.166" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="HEAD" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="CHECK_CODE_SMELLS_BEFORE_PROJECT_COMMIT" value="false" />
+    <option name="CHECK_NEW_TODO" value="false" />
+    <ignored-roots>
+      <path value="$PROJECT_DIR$/webapp/pprotein" />
+    </ignored-roots>
+    <MESSAGE value="unlock 忘れ?" />
+    <MESSAGE value="実装し直した" />
+    <MESSAGE value="order の検索件数を cache しない" />
+    <MESSAGE value="unused" />
+    <MESSAGE value="shipping orders のキャッシュ" />
+    <MESSAGE value="user_id に関する orders の count をキャッシュ" />
+    <MESSAGE value="count のキャッシュをユーザーごとに削除" />
+    <MESSAGE value="いらなそうな index を消しちゃう" />
+    <MESSAGE value="status 更新なら count のキャッシュは消さなくていい" />
+    <MESSAGE value="plan のキャッシュは不要そう" />
+    <MESSAGE value="plan 用の product を絞り込む" />
+    <MESSAGE value="計測の撤去" />
+    <MESSAGE value="syntax error" />
+    <MESSAGE value="クエリ改善間違ってる" />
+    <MESSAGE value="curl しない" />
+    <MESSAGE value="restart をもとに戻す" />
+    <MESSAGE value="pprotein のソースコードを配置" />
+    <MESSAGE value="pprotein が nginx のログを解析できるようにする" />
+    <MESSAGE value="pprotein の設定を配置" />
+    <MESSAGE value="pprotein が mysql のスロークエリログを解析できるようにする" />
+    <MESSAGE value="fixup! pprotein の service 定義" />
+    <MESSAGE value="squash! pprotein の service 定義" />
+    <MESSAGE value="fix" />
+    <MESSAGE value="pprotein の service 定義" />
+    <MESSAGE value="fixup! pprotein のソースコードを配置" />
+    <option name="LAST_COMMIT_MESSAGE" value="fixup! pprotein のソースコードを配置" />
+  </component>
+  <component name="VgoProject">
+    <settings-migrated>true</settings-migrated>
+  </component>
+</project>

@@ -133,6 +133,9 @@ else
     cd ./benchmarker
     docker build --target local-runner -t worker/local-runner:latest worker
 
+    # pprotein の計測開始
+    curl localhost:9000/api/group/collect
+
     cd worker
     mkdir -p ./scores ./logs
     SCORE=$(docker run --rm \

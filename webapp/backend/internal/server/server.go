@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	pprotein "github.com/kaz/pprotein/integration"
 	"github.com/riandyrn/otelchi"
 )
 
@@ -59,6 +60,9 @@ func NewServer() (*Server, *sqlx.DB, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+
+	// pprotein の計測用エンドポイントをセットアップ
+	r.Handle("/debug/*", pprotein.NewDebugHandler())
 
 	s := &Server{
 		Router: r,
