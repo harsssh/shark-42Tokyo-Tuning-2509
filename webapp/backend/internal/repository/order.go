@@ -20,8 +20,13 @@ const (
 )
 
 type orderRepoState struct {
+	// 更新のたびにインクリメントされるバージョン
 	shippingOrdersVersion int64
-	mu                    sync.RWMutex
+
+	// GetShippingOrders の結果キャッシュ（参照返却前提）
+	shippingOrdersCache []model.Order
+
+	mu sync.RWMutex
 }
 
 type OrderRepository struct {
@@ -45,6 +50,7 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 func (r *OrderRepository) onUpdateOrders() {
 	r.state.mu.Lock()
 	r.state.shippingOrdersVersion++
+	r.state.shippingOrdersCache = nil
 	r.state.mu.Unlock()
 }
 
@@ -106,10 +112,19 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 	return err
 }
 
-// 配送中(shipped_status:shipping)の注文一覧を取得
+// 配送中(shipped_status_code: shipping)の注文一覧を取得（参照返却・バージョン連動キャッシュ）
 func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order, error) {
+	r.state.mu.RLock()
+	if cache := r.state.shippingOrdersCache; cache != nil {
+		out := cache
+		r.state.mu.RUnlock()
+		return out, nil
+	}
+	localVer := r.state.shippingOrdersVersion
+	r.state.mu.RUnlock()
+
 	var orders []model.Order
-	query := `
+	const query = `
         SELECT
             o.order_id,
             p.weight,
@@ -118,9 +133,18 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
         JOIN products p ON o.product_id = p.product_id
         WHERE o.shipped_status_code = ?
     `
-	err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping)
+	if err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping); err != nil {
+		return nil, err
+	}
 
-	return orders, err
+	// 取得中に更新が入っていないことを確認してからキャッシュに格納
+	r.state.mu.Lock()
+	if r.state.shippingOrdersVersion == localVer && r.state.shippingOrdersCache == nil {
+		r.state.shippingOrdersCache = orders
+	}
+	r.state.mu.Unlock()
+
+	return orders, nil
 }
 
 // 注文履歴一覧を取得
