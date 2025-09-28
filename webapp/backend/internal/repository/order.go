@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/samber/lo"
 	"strings"
 	"sync"
 
@@ -54,38 +55,45 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 	return r.state.shippingOrdersVersion, nil
 }
 
-func (r *OrderRepository) onUpdateOrders() {
+func (r *OrderRepository) onUpdateOrders(userIDs ...int) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
 
 	r.state.shippingOrdersVersion++
 	r.state.shippingOrdersCache = nil
-	// TODO: 一部だけ無効化できないか
-	r.state.countByUser = make(map[int]int)
+
+	if len(userIDs) == 0 {
+		r.state.countByUser = make(map[int]int)
+		return
+	}
+
+	for _, uid := range lo.Uniq(userIDs) {
+		delete(r.state.countByUser, uid)
+	}
 }
 
-// ダメだったら Create を復旧する
 func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order) ([]string, error) {
 	if len(orders) == 0 {
 		return []string{}, nil
 	}
 
-	// NOTE: 良くないキャスト
 	txx, ok := r.db.(*sqlx.Tx)
 	if !ok {
 		return nil, fmt.Errorf("BatchCreate must be called within a transaction")
 	}
 
-	// named exec で insert する
 	query := `INSERT INTO orders (user_id, product_id, shipped_status, created_at) VALUES (:user_id, :product_id, 'shipping', NOW())`
 	result, err := txx.NamedExecContext(ctx, query, orders)
 	if err != nil {
 		return nil, err
 	}
 
-	r.onUpdateOrders()
+	userIDs := lo.Map(orders, func(o *model.Order, _ int) int {
+		return o.UserID
+	})
+	r.onUpdateOrders(userIDs...)
 
-	// NOTE: 結構怖い
+	// このロジック大丈夫?
 	var insertedIDs []string
 	lastID, err := result.LastInsertId()
 	if err != nil {
@@ -114,12 +122,24 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 	}
 	query = r.db.Rebind(query)
 	_, err = r.db.ExecContext(ctx, query, args...)
-
-	if err == nil {
-		r.onUpdateOrders()
+	if err != nil {
+		return err
 	}
 
-	return err
+	// わざわざ select するの遅いかも
+	var userIDs []int
+	q2, a2, err2 := sqlx.In("SELECT DISTINCT user_id FROM orders WHERE order_id IN (?)", orderIDs)
+	if err2 == nil {
+		q2 = r.db.Rebind(q2)
+		if err3 := r.db.SelectContext(ctx, &userIDs, q2, a2...); err3 == nil && len(userIDs) > 0 {
+			r.onUpdateOrders(userIDs...)
+			return nil
+		}
+	}
+
+	// フォールバック（取得失敗時や対象ユーザー不明時は全クリア）
+	r.onUpdateOrders()
+	return nil
 }
 
 // 配送中(shipped_status_code: shipping)の注文一覧を取得（参照返却・バージョン連動キャッシュ）
