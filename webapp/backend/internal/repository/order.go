@@ -152,13 +152,22 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
 
 	var orders []model.Order
 	const query = `
-        SELECT
-            o.order_id,
-            p.weight,
-            p.value
-        FROM orders o
-        JOIN products p ON o.product_id = p.product_id
-        WHERE o.shipped_status_code = ?
+		SELECT weight, value, order_id
+		FROM (
+				 SELECT
+					 p.weight,
+					 p.value,
+					 o.order_id,
+					 ROW_NUMBER() OVER (
+						 PARTITION BY p.weight
+						 ORDER BY p.value DESC, o.order_id
+						 ) AS rn
+				 FROM orders o
+						  JOIN products p
+							   ON o.product_id = p.product_id
+				 WHERE o.shipped_status_code = 'shipping'
+			 ) t
+		WHERE rn = 1;
     `
 	if err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping); err != nil {
 		return nil, err
