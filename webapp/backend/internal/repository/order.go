@@ -20,8 +20,16 @@ const (
 )
 
 type orderRepoState struct {
+	// 更新のたびにインクリメントされるバージョン（配送中一覧キャッシュ用）
 	shippingOrdersVersion int64
-	mu                    sync.RWMutex
+
+	// GetShippingOrders の結果キャッシュ（参照返却前提）
+	shippingOrdersCache []model.Order
+
+	// user_id のみの COUNT(*) キャッシュ
+	countByUser map[int]int
+
+	mu sync.RWMutex
 }
 
 type OrderRepository struct {
@@ -30,6 +38,11 @@ type OrderRepository struct {
 }
 
 func newOrderRepository(db DBTX, state *orderRepoState) *OrderRepository {
+	state.mu.Lock()
+	if state.countByUser == nil {
+		state.countByUser = make(map[int]int)
+	}
+	state.mu.Unlock()
 	return &OrderRepository{
 		db:    db,
 		state: state,
@@ -42,34 +55,45 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 	return r.state.shippingOrdersVersion, nil
 }
 
-func (r *OrderRepository) onUpdateOrders() {
+func (r *OrderRepository) onUpdateOrders(userIDs ...int) {
 	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+
 	r.state.shippingOrdersVersion++
-	r.state.mu.Unlock()
+	r.state.shippingOrdersCache = nil
+
+	if len(userIDs) == 0 {
+		r.state.countByUser = make(map[int]int)
+		return
+	}
+
+	for _, uid := range lo.Uniq(userIDs) {
+		delete(r.state.countByUser, uid)
+	}
 }
 
-// ダメだったら Create を復旧する
 func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order) ([]string, error) {
 	if len(orders) == 0 {
 		return []string{}, nil
 	}
 
-	// NOTE: 良くないキャスト
 	txx, ok := r.db.(*sqlx.Tx)
 	if !ok {
 		return nil, fmt.Errorf("BatchCreate must be called within a transaction")
 	}
 
-	// named exec で insert する
 	query := `INSERT INTO orders (user_id, product_id, shipped_status, created_at) VALUES (:user_id, :product_id, 'shipping', NOW())`
 	result, err := txx.NamedExecContext(ctx, query, orders)
 	if err != nil {
 		return nil, err
 	}
 
-	r.onUpdateOrders()
+	userIDs := lo.Map(orders, func(o *model.Order, _ int) int {
+		return o.UserID
+	})
+	r.onUpdateOrders(userIDs...)
 
-	// NOTE: 結構怖い
+	// このロジック大丈夫?
 	var insertedIDs []string
 	lastID, err := result.LastInsertId()
 	if err != nil {
@@ -98,18 +122,39 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 	}
 	query = r.db.Rebind(query)
 	_, err = r.db.ExecContext(ctx, query, args...)
-
-	if err == nil {
-		r.onUpdateOrders()
+	if err != nil {
+		return err
 	}
 
-	return err
+	// わざわざ select するの遅いかも
+	var userIDs []int
+	q2, a2, err2 := sqlx.In("SELECT DISTINCT user_id FROM orders WHERE order_id IN (?)", orderIDs)
+	if err2 == nil {
+		q2 = r.db.Rebind(q2)
+		if err3 := r.db.SelectContext(ctx, &userIDs, q2, a2...); err3 == nil && len(userIDs) > 0 {
+			r.onUpdateOrders(userIDs...)
+			return nil
+		}
+	}
+
+	// フォールバック（取得失敗時や対象ユーザー不明時は全クリア）
+	r.onUpdateOrders()
+	return nil
 }
 
-// 配送中(shipped_status:shipping)の注文一覧を取得
+// 配送中(shipped_status_code: shipping)の注文一覧を取得（参照返却・バージョン連動キャッシュ）
 func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order, error) {
+	r.state.mu.RLock()
+	if cache := r.state.shippingOrdersCache; cache != nil {
+		out := cache
+		r.state.mu.RUnlock()
+		return out, nil
+	}
+	localVer := r.state.shippingOrdersVersion
+	r.state.mu.RUnlock()
+
 	var orders []model.Order
-	query := `
+	const query = `
         SELECT
             o.order_id,
             p.weight,
@@ -118,9 +163,17 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
         JOIN products p ON o.product_id = p.product_id
         WHERE o.shipped_status_code = ?
     `
-	err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping)
+	if err := r.db.SelectContext(ctx, &orders, query, shippedStatusEnumShipping); err != nil {
+		return nil, err
+	}
 
-	return orders, err
+	r.state.mu.Lock()
+	if r.state.shippingOrdersVersion == localVer && r.state.shippingOrdersCache == nil {
+		r.state.shippingOrdersCache = orders
+	}
+	r.state.mu.Unlock()
+
+	return orders, nil
 }
 
 // 注文履歴一覧を取得
@@ -149,26 +202,34 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
 		args = append(args, searchPattern)
 	}
 
-	// 件数の取得。検索条件がなければ orders のみでカウントして余計な JOIN を避ける
-	countQuery := lo.Ternary(searchApplied,
-		fmt.Sprintf(`
+	var total int
+	if !searchApplied {
+		r.state.mu.RLock()
+		cached, ok := r.state.countByUser[userID]
+		r.state.mu.RUnlock()
+		if ok {
+			total = cached
+		} else {
+			const countQuery = "SELECT COUNT(*) FROM orders o WHERE o.user_id = ?"
+			if err := r.db.GetContext(ctx, &total, countQuery, userID); err != nil {
+				return nil, 0, err
+			}
+			r.state.mu.Lock()
+			r.state.countByUser[userID] = total
+			r.state.mu.Unlock()
+		}
+	} else {
+		countQuery := fmt.Sprintf(`
             SELECT COUNT(*)
             FROM orders o
             JOIN products p ON p.product_id = o.product_id
-            WHERE %s`,
-			strings.Join(conds, " AND "),
-		),
-		"SELECT COUNT(*) FROM orders o WHERE o.user_id = ?",
-	)
-	countArgs := lo.Ternary(searchApplied,
-		[]any{userID, searchPattern},
-		[]any{userID},
-	)
-
-	var total int
-	if err := r.db.GetContext(ctx, &total, countQuery, countArgs...); err != nil {
-		return nil, 0, err
+            WHERE %s`, strings.Join(conds, " AND "),
+		)
+		if err := r.db.GetContext(ctx, &total, countQuery, userID, searchPattern); err != nil {
+			return nil, 0, err
+		}
 	}
+
 	if total == 0 {
 		return []model.Order{}, 0, nil
 	}
