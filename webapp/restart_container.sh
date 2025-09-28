@@ -14,8 +14,7 @@ if ! docker network ls | grep -q "$NETWORK_NAME"; then
 fi
 
 if [[ $HOSTNAME == ftt2508-* ]]; then
-#    HOSTNAME=$HOSTNAME docker compose down --volumes --rmi local
-    HOSTNAME=$HOSTNAME docker compose down --volumes
+    HOSTNAME=$HOSTNAME docker compose down --volumes --rmi local
     HOSTNAME=$HOSTNAME docker compose up --build -d
 else
     echo "ローカル環境でのコンテナ再起動を開始します。"
