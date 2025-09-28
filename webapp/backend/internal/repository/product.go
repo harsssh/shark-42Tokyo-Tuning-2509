@@ -38,6 +38,7 @@ func (r *ProductRepository) ListProducts(
 	needLoad := len(*r.allProductCache) == 0
 	if needLoad {
 		if err := r.WarmUp(ctx); err != nil {
+			r.mu.Unlock()
 			return nil, 0, err
 		}
 	}
