@@ -6,9 +6,7 @@ ALTER TABLE products
     ADD INDEX idx_products_weight_desc_product_id (weight DESC, product_id),
     ADD INDEX idx_products_weight_product_id (weight, product_id),
     ADD INDEX idx_products_name_desc_product_id (name DESC, product_id),
-    ADD INDEX idx_products_name_product_id (name, product_id),
-    ADD INDEX idx_products_name (name),
-    ADD INDEX idx_products_product_id_weight_value (product_id, weight, value);
+    ADD INDEX idx_products_name_product_id (name, product_id);
 
 -- ログインの改善
 ALTER TABLE users
