@@ -5,38 +5,19 @@ import (
 	"backend/internal/repository"
 	"backend/internal/service/utils"
 	"context"
-	lru "github.com/hashicorp/golang-lru/v2"
-	"github.com/samber/lo"
 	"log"
 )
 
-const planCacheSize = 1024
-
-type planCacheKey struct {
-	ordersVersion int64
-	capacity      int
-}
-
 type RobotService struct {
-	store     *repository.Store
-	planCache *lru.Cache[planCacheKey, model.DeliveryPlan]
+	store *repository.Store
 }
 
 func NewRobotService(store *repository.Store) *RobotService {
-	return &RobotService{store: store, planCache: lo.Must(lru.New[planCacheKey, model.DeliveryPlan](planCacheSize))}
+	return &RobotService{store: store}
 }
 
 func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string, capacity int) (*model.DeliveryPlan, error) {
 	var plan model.DeliveryPlan
-
-	cacheKey := planCacheKey{
-		ordersVersion: lo.Must(s.store.OrderRepo.GetShippingOrdersVersion(ctx)),
-		capacity:      capacity,
-	}
-	if v, ok := s.planCache.Get(cacheKey); ok {
-		v.RobotID = robotID
-		return &v, nil
-	}
 
 	err := utils.WithTimeout(ctx, func(ctx context.Context) error {
 		return s.store.ExecTx(ctx, func(txStore *repository.Store) error {
@@ -66,9 +47,6 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 	if err != nil {
 		return nil, err
 	}
-
-	// 元のバージョンをキーにキャッシュすることで、配送ステータス更新後の再計算を促す
-	s.planCache.Add(cacheKey, plan)
 
 	return &plan, nil
 }
