@@ -5,23 +5,33 @@ import (
 	"context"
 	"fmt"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/samber/lo"
 	"log"
 	"strings"
+	"sync"
 )
 
 var ProductListCountCacheSize = 64
 
-type ProductRepository struct {
-	db    DBTX
-	cache *lru.Cache[string, int] // cache key: search -> total_count
+type productRepoState struct {
+	once           sync.Once
+	listCountCache *lru.Cache[string, int]
 }
 
-func NewProductRepository(db DBTX) *ProductRepository {
-	cache, err := lru.New[string, int](ProductListCountCacheSize)
-	if err != nil {
-		panic(err)
-	}
-	return &ProductRepository{db: db, cache: cache}
+func (s *productRepoState) initListCountCache() *lru.Cache[string, int] {
+	s.once.Do(func() {
+		s.listCountCache = lo.Must(lru.New[string, int](ProductListCountCacheSize))
+	})
+	return s.listCountCache
+}
+
+type ProductRepository struct {
+	db             DBTX
+	listCountCache *lru.Cache[string, int] // listCountCache key: search -> total_count
+}
+
+func newProductRepository(db DBTX, state *productRepoState) *ProductRepository {
+	return &ProductRepository{db: db, listCountCache: state.initListCountCache()}
 }
 
 // 商品一覧を全件取得し、アプリケーション側でページング処理を行う
@@ -43,7 +53,7 @@ func (r *ProductRepository) ListProducts(
 	// 総件数
 	var total int
 	totalCacheKey := req.Search
-	if v, ok := r.cache.Get(totalCacheKey); ok {
+	if v, ok := r.listCountCache.Get(totalCacheKey); ok {
 		total = v
 	} else {
 		// キャッシュにない場合はDBから取得してキャッシュに保存
@@ -51,8 +61,8 @@ func (r *ProductRepository) ListProducts(
 		if err := r.db.GetContext(ctx, &total, countSQL, args...); err != nil {
 			return nil, 0, err
 		}
-		r.cache.Add(totalCacheKey, total)
-		log.Printf("ListProducts: cache len=%d\n", r.cache.Len())
+		r.listCountCache.Add(totalCacheKey, total)
+		log.Printf("ListProducts: listCountCache len=%d\n", r.listCountCache.Len())
 	}
 
 	// データ取得（ORDER BY の列名・並び順をそのまま埋め込む）
