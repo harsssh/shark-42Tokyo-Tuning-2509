@@ -108,6 +108,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.local.conf:/etc/nginx/nginx.conf
+      - nginx-logs:/var/log/nginx
     networks:
       - webapp-network
     depends_on:
@@ -145,6 +146,8 @@ services:
       - ./pprotein/data:/etc/pprotein/data
       - nginx-logs:/var/log/nginx
       - mysql-logs:/var/log/mysql
+    environment:
+      PPROTEIN_HTTPLOG: "/var/log/nginx/_access.log"
 
 # ----------------------------------------------------
 # ネットワーク定義: コンテナ間の通信
@@ -153,3 +156,6 @@ networks:
   webapp-network:
     name: webapp-network
     external: true
+
+volumes:
+  nginx-logs:
