@@ -55,6 +55,13 @@ func (r *OrderRepository) GetShippingOrdersVersion(ctx context.Context) (int64, 
 	return r.state.shippingOrdersVersion, nil
 }
 
+func (r *OrderRepository) onUpdateShippingOnly() {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	r.state.shippingOrdersVersion++
+	r.state.shippingOrdersCache = nil
+}
+
 func (r *OrderRepository) onUpdateOrders(userIDs ...int) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
@@ -91,6 +98,7 @@ func (r *OrderRepository) BatchCreate(ctx context.Context, orders []*model.Order
 	userIDs := lo.Map(orders, func(o *model.Order, _ int) int {
 		return o.UserID
 	})
+	// 本当はキャッシュの更新をしたい
 	r.onUpdateOrders(userIDs...)
 
 	// このロジック大丈夫?
@@ -126,19 +134,8 @@ func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, 
 		return err
 	}
 
-	// わざわざ select するの遅いかも
-	var userIDs []int
-	q2, a2, err2 := sqlx.In("SELECT DISTINCT user_id FROM orders WHERE order_id IN (?)", orderIDs)
-	if err2 == nil {
-		q2 = r.db.Rebind(q2)
-		if err3 := r.db.SelectContext(ctx, &userIDs, q2, a2...); err3 == nil && len(userIDs) > 0 {
-			r.onUpdateOrders(userIDs...)
-			return nil
-		}
-	}
+	r.onUpdateShippingOnly()
 
-	// フォールバック（取得失敗時や対象ユーザー不明時は全クリア）
-	r.onUpdateOrders()
 	return nil
 }
 
