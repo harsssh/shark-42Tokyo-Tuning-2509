@@ -7,31 +7,35 @@ import (
 )
 
 type Store struct {
-	db             DBTX
-	orderRepoState *orderRepoState
-	UserRepo       *UserRepository
-	SessionRepo    *SessionRepository
-	ProductRepo    *ProductRepository
-	OrderRepo      *OrderRepository
+	db DBTX
+
+	sessionRepoState *sessionRepoState
+	productRepoState *productRepoState
+	orderRepoState   *orderRepoState
+
+	UserRepo    *UserRepository
+	SessionRepo *SessionRepository
+	ProductRepo *ProductRepository
+	OrderRepo   *OrderRepository
 }
 
-func newStore(db DBTX, orderState *orderRepoState) *Store {
-	if orderState == nil {
-		orderState = &orderRepoState{}
-	}
+// state を使う回すためのコンストラクタ
+func newStore(db DBTX, sessionState *sessionRepoState, productState *productRepoState, orderState *orderRepoState) *Store {
 	store := &Store{
-		db:             db,
-		orderRepoState: orderState,
-		UserRepo:       NewUserRepository(db),
-		SessionRepo:    NewSessionRepository(db),
-		ProductRepo:    NewProductRepository(db),
-		OrderRepo:      newOrderRepository(db, orderState),
+		db:               db,
+		sessionRepoState: sessionState,
+		productRepoState: productState,
+		orderRepoState:   orderState,
+		UserRepo:         NewUserRepository(db),
+		SessionRepo:      newSessionRepository(db, sessionState),
+		ProductRepo:      newProductRepository(db, productState),
+		OrderRepo:        newOrderRepository(db, orderState),
 	}
 	return store
 }
 
 func NewStore(db DBTX) *Store {
-	return newStore(db, &orderRepoState{})
+	return newStore(db, &sessionRepoState{}, &productRepoState{}, &orderRepoState{})
 }
 
 func (s *Store) ExecTx(ctx context.Context, fn func(txStore *Store) error) error {
@@ -46,7 +50,7 @@ func (s *Store) ExecTx(ctx context.Context, fn func(txStore *Store) error) error
 	}
 	defer tx.Rollback()
 
-	txStore := newStore(tx, s.orderRepoState)
+	txStore := newStore(tx, s.sessionRepoState, s.productRepoState, s.orderRepoState)
 	if err := fn(txStore); err != nil {
 		return err
 	}

@@ -38,10 +38,6 @@ type OrderRepository struct {
 }
 
 func newOrderRepository(db DBTX, state *orderRepoState) *OrderRepository {
-	if state == nil {
-		state = &orderRepoState{}
-	}
-
 	state.mu.Lock()
 	if state.countCache == nil {
 		state.countCache = lo.Must(lru.New[orderCountCacheKey, int](orderListCountCacheSize))

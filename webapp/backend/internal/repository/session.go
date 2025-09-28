@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/samber/lo"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,9 +18,21 @@ type sessionCacheEntry struct {
 	expiresAt time.Time
 }
 
+type sessionRepoState struct {
+	once         sync.Once
+	sessionCache *lru.Cache[string, sessionCacheEntry]
+}
+
+func (s *sessionRepoState) initSessionCache() *lru.Cache[string, sessionCacheEntry] {
+	s.once.Do(func() {
+		s.sessionCache = lo.Must(lru.New[string, sessionCacheEntry](sessionCacheSize))
+	})
+	return s.sessionCache
+}
+
 type SessionRepository struct {
-	db    DBTX
-	cache *lru.Cache[string, sessionCacheEntry] // sessionID -> {userID, expiresAt}
+	db           DBTX
+	sessionCache *lru.Cache[string, sessionCacheEntry] // sessionID -> {userID, expiresAt}
 }
 
 func NewSessionRepository(db DBTX) *SessionRepository {
@@ -27,9 +41,13 @@ func NewSessionRepository(db DBTX) *SessionRepository {
 		panic(err)
 	}
 	return &SessionRepository{
-		db:    db,
-		cache: cache,
+		db:           db,
+		sessionCache: cache,
 	}
+}
+
+func newSessionRepository(db DBTX, state *sessionRepoState) *SessionRepository {
+	return &SessionRepository{db: db, sessionCache: state.initSessionCache()}
 }
 
 // セッションを作成し、セッションIDと有効期限を返す
@@ -48,7 +66,7 @@ func (r *SessionRepository) Create(ctx context.Context, userBusinessID int, dura
 	}
 
 	// キャッシュへ保存
-	r.cache.Add(sessionIDStr, sessionCacheEntry{userID: userBusinessID, expiresAt: expiresAt})
+	r.sessionCache.Add(sessionIDStr, sessionCacheEntry{userID: userBusinessID, expiresAt: expiresAt})
 
 	return sessionIDStr, expiresAt, nil
 }
@@ -58,11 +76,11 @@ func (r *SessionRepository) FindUserBySessionID(ctx context.Context, sessionID s
 	now := time.Now()
 
 	// 先にキャッシュを確認 (あるはず)
-	if v, ok := r.cache.Get(sessionID); ok {
+	if v, ok := r.sessionCache.Get(sessionID); ok {
 		if now.Before(v.expiresAt) {
 			return v.userID, nil
 		}
-		r.cache.Remove(sessionID)
+		r.sessionCache.Remove(sessionID)
 		return 0, errors.New("session expired")
 	}
 
