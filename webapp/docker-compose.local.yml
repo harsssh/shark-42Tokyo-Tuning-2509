@@ -132,6 +132,20 @@ services:
     networks:
       - webapp-network
 
+  pprotein:
+    container_name: pprotein
+    build:
+      context: pprotein
+    ports:
+      - "9000:9000"
+    networks:
+      - webapp-network
+    working_dir: /etc/pprotein
+    volumes:
+      - ./pprotein/data:/etc/pprotein/data
+      - nginx-logs:/var/log/nginx
+      - mysql-logs:/var/log/mysql
+
 # ----------------------------------------------------
 # ネットワーク定義: コンテナ間の通信
 # ----------------------------------------------------
